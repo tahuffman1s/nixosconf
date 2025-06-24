@@ -11,6 +11,19 @@
     gamemode
     gamescope
     kitty
+    qbittorrent
+    fooyin
+    handbrake
+    freetube
+    calibre
+    filebot
+    makemkv
+    vlc
+    python313
+    python313Packages.pip
+    python313Packages.pipx
+    python313Packages.cryptography
+    jellyfin-media-player
   ];
 
   programs.git = {
@@ -34,9 +47,9 @@
       alias fetch=fastfetch
       alias update="sudo nixos-rebuild switch"
       alias cd=z
-      alias flake="sudo code /etc/nixos/flake.nix"
-      alias conf="sudo code /etc/nixos/configuration.nix"
-      alias home="sudo code /etc/nixos/home.nix"
+      alias flake="code /etc/nixos/flake.nix"
+      alias conf="code /etc/nixos/configuration.nix"
+      alias home="code /etc/nixos/home.nix"
       alias genConf="sudo nixos-generate-config"
     '';
   };
@@ -45,6 +58,7 @@
   services.flatpak.packages = [
     "io.github.input_leap.input-leap"
     "com.protonvpn.www"
+    "org.gtk.Gtk3theme.Breeze"
   ];
 
   programs.vscode = {

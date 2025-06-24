@@ -124,8 +124,20 @@
      vim
      wget
      kdePackages.partitionmanager
+     ffmpeg
+     jellyfin
+     jellyfin-web
+     jellyfin-ffmpeg
+     linuxKernel.packages.linux_6_15.xone
      inputs.zen-browser.packages.${pkgs.system}.default
   ];
+
+  services.jellyfin = {
+    enable = true;
+    openFirewall = true;
+  };
+
+  hardware.xone.enable = true;
 
 
   environment.variables.EDITOR = "vim";
