@@ -14,6 +14,31 @@
   boot.loader.systemd-boot.enable = true;
   boot.loader.efi.canTouchEfiVariables = true;
 
+  boot = {
+
+      plymouth = {
+        enable = true;
+        theme = "rings";
+        themePackages = with pkgs; [
+          (adi1090x-plymouth-themes.override {
+            selected_themes = [ "rings" ];
+          })
+        ];
+      };
+
+      consoleLogLevel = 3;
+      initrd.verbose = false;
+      kernelParams = [
+        "quiet"
+        "splash"
+        "boot.shell_on_fail"
+        "udev.log_priority=3"
+        "rd.systemd.show_status=auto"
+      ];
+      loader.timeout = 0;
+  };
+
+
   nix.settings.experimental-features = [ "nix-command" "flakes" ];
 
   # Use latest kernel.
@@ -117,6 +142,7 @@
     enable = true;
   };
 
+
   # List packages installed in system profile. To search, run:
   # $ nix search wget
   environment.systemPackages = with pkgs; [
@@ -128,9 +154,12 @@
      jellyfin
      jellyfin-web
      jellyfin-ffmpeg
+     openssl
      linuxKernel.packages.linux_6_15.xone
      inputs.zen-browser.packages.${pkgs.system}.default
   ];
+
+
 
   services.jellyfin = {
     enable = true;
@@ -166,6 +195,6 @@
   # this value at the release version of the first install of this system.
   # Before changing this value read the documentation for this option
   # (e.g. man configuration.nix or on https://nixos.org/nixos/options.html).
-  system.stateVersion = "25.05"; # Did you read the comment?
+  system.stateVersion = "25.11"; # Did you read the comment?
 
 }
