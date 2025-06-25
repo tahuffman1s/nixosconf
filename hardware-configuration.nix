@@ -14,12 +14,17 @@
   boot.extraModulePackages = [ ];
 
   fileSystems."/" =
-    { device = "/dev/disk/by-uuid/2caa95d3-3e6f-46a0-9c69-e734f81741b0";
+    { device = "/dev/disk/by-uuid/4f00c81e-998f-4b7d-86fa-ea0fb91cf6b6";
+      fsType = "ext4";
+    };
+
+  fileSystems."/mnt/GD1" =
+    { device = "/dev/disk/by-uuid/f872ffaa-a901-4f8b-9135-10bb98cd6db8";
       fsType = "ext4";
     };
 
   fileSystems."/boot" =
-    { device = "/dev/disk/by-uuid/E353-1B16";
+    { device = "/dev/disk/by-uuid/350D-7875";
       fsType = "vfat";
       options = [ "fmask=0077" "dmask=0077" ];
     };
@@ -27,11 +32,6 @@
   fileSystems."/mnt/GD2" =
     { device = "/dev/disk/by-uuid/f96fa08b-a212-466d-817c-1d15cf5a323f";
       fsType = "btrfs";
-    };
-
-  fileSystems."/mnt/GD1" =
-    { device = "/dev/disk/by-uuid/f872ffaa-a901-4f8b-9135-10bb98cd6db8";
-      fsType = "ext4";
     };
 
   swapDevices = [ ];
@@ -42,6 +42,8 @@
   # with explicit per-interface declarations with `networking.interfaces.<interface>.useDHCP`.
   networking.useDHCP = lib.mkDefault true;
   # networking.interfaces.enp10s0.useDHCP = lib.mkDefault true;
+  # networking.interfaces.proton0.useDHCP = lib.mkDefault true;
+  # networking.interfaces.pvpnksintrf1.useDHCP = lib.mkDefault true;
   # networking.interfaces.wlp9s0.useDHCP = lib.mkDefault true;
 
   nixpkgs.hostPlatform = lib.mkDefault "x86_64-linux";

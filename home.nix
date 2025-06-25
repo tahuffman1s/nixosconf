@@ -32,7 +32,6 @@ in
     makemkv
     vlc
     jellyfin-media-player
-    calibre
     dracula-theme
     nerd-fonts.fira-mono
     kdePackages.breeze-gtk
@@ -117,6 +116,8 @@ in
       alias home="code /etc/nixos/home.nix"
       alias genConf="sudo nixos-generate-config"
       alias ship="code ~/.config/starship.toml"
+      alias genHardware="sudo nixos-generate-config"
+      alias wipeass="journalctl -xe --unit home-manager-travis"
     '';
   };
   
@@ -125,6 +126,7 @@ in
     "io.github.input_leap.input-leap"
     "com.protonvpn.www"
     "org.gtk.Gtk3theme.Breeze"
+    "com.calibre_ebook.calibre"
     "net.filebot.FileBot"
     rec {
       appId = "org.tahuffman1s.rsensor";
