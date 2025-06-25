@@ -1,5 +1,19 @@
 { config, pkgs, ... }:
 
+let 
+  gtkTheme = builtins.fetchTarball {
+    url = "https://github.com/tahuffman1s/nixosconf/raw/refs/heads/main/Files/Dracula.tar.xz";
+    sha256 = "1xrbv4nw918xjm79qpwlbyviis7s86d4pn4j68ll0iqjic0fzkxa";
+  };
+  iconTheme = builtins.fetchTarball {
+    url = "https://github.com/tahuffman1s/nixosconf/raw/refs/heads/main/Files/Tela-circle-dracula.tar.xz";
+    sha256 = "1kqzw8ajm2hvn1fa0xbx977amq0jblkd2ipsxw7qrb9i0cxm6j6c";
+  };
+  kdeTheme = builtins.fetchTarball {
+    url = "https://github.com/tahuffman1s/nixosconf/raw/refs/heads/main/Files/Draculakde.tar.xz";
+    sha256 = "16jb6z2x0wmdnlk7lxpa57a36vw8571idfcn3gv9zdps0y68583x";
+  };
+in 
 {
   home.username = "travis";
   home.homeDirectory = "/home/travis";
@@ -20,20 +34,15 @@
     jellyfin-media-player
     calibre
     dracula-theme
-    tela-circle-icon-theme
     nerd-fonts.fira-mono
     kdePackages.breeze-gtk
   ];
 
   home.file = {
-    ".themes" = {source = "${builtins.fetchTarball {
-      url = "https://github.com/dracula/gtk/releases/download/v4.0.0/Dracula.tar.xz";
-      sha256 = "1xrbv4nw918xjm79qpwlbyviis7s86d4pn4j68ll0iqjic0fzkxa";
-    }}";};
-    ".icons" = {source = "${builtins.fetchTarball {
-      url = "https://ocs-dl.fra1.cdn.digitaloceanspaces.com/data/files/1581514534/Tela-circle-dracula.tar.xz?response-content-disposition=attachment%3B%2520Tela-circle-dracula.tar.xz&X-Amz-Content-Sha256=UNSIGNED-PAYLOAD&X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=RWJAQUNCHT7V2NCLZ2AL%2F20250625%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250625T014924Z&X-Amz-SignedHeaders=host&X-Amz-Expires=3600&X-Amz-Signature=89052fa3f2457dded1266a4ae4243de80ce985e576c3b27769be47cf107e63f4";
-      sha256 = "1kqzw8ajm2hvn1fa0xbx977amq0jblkd2ipsxw7qrb9i0cxm6j6c";
-    }}";};
+    ".themes" = {source = "${gtkTheme}";};
+    ".icons" = {source = "${iconTheme}";};
+    ".local/share/icons" = {source = "${iconTheme}";};
+    ".local/share/themes/Dracula" = {source ="${kdeTheme}";};
   };
 
   gtk = {
@@ -138,7 +147,7 @@
       Environment = {
         XCURSOR_PATH = "/run/host/user-share/icons:/run/host/share/icons";
         GTK_THEME = "Dracula";
-        ICON_THEME = "Tela-circle-dark";
+        ICON_THEME = "Tela-circle-dracula";
       };
     };
   };
@@ -157,17 +166,22 @@
       "window.titleBarStyle" = "native";
       "window.menuBarVisibility" = "toggle";
       "window.customTitleBarVisibility" = "never";
+      "editor.fontFamily" = "'FiraMono Nerd Font Mono', 'monospace', monospace";
     };
   };
 
   programs.plasma = {
     enable = true;
     workspace = {
+      colorScheme = "Dracula";
+      theme = "Dracula";
+      windowDecorations.library = "org.kde.kwin.aurorae";
+      windowDecorations.theme = "__aurorae__svg__Dracula";
       wallpaper = "${pkgs.fetchurl {
         url = "https://raw.githubusercontent.com/tahuffman1s/Wallpapers/refs/heads/main/nix.jpg";
         sha256 = "I7Daq4rI7f09V6uctWr0yIzspDI/K4PBObsm3Vp2fqc=";
       }}";
-      iconTheme = "Tela-circle-dark";
+      iconTheme = "Tela-circle-dracula";
     };
     hotkeys.commands."launch-kitty" = {
       name = "Launch Kitty";
