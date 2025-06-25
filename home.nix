@@ -11,7 +11,6 @@
     mangohud
     gamemode
     gamescope
-    kitty
     qbittorrent
     fooyin
     handbrake
@@ -20,7 +19,32 @@
     vlc
     jellyfin-media-player
     calibre
+    dracula-theme
+    tela-circle-icon-theme
+    nerd-fonts.fira-mono
+    kdePackages.breeze-gtk
   ];
+
+  home.file = {
+    ".themes" = {source = "${builtins.fetchTarball {
+      url = "https://github.com/dracula/gtk/releases/download/v4.0.0/Dracula.tar.xz";
+      sha256 = "1xrbv4nw918xjm79qpwlbyviis7s86d4pn4j68ll0iqjic0fzkxa";
+    }}";};
+    ".icons" = {source = "${builtins.fetchTarball {
+      url = "https://ocs-dl.fra1.cdn.digitaloceanspaces.com/data/files/1581514534/Tela-circle-dracula.tar.xz?response-content-disposition=attachment%3B%2520Tela-circle-dracula.tar.xz&X-Amz-Content-Sha256=UNSIGNED-PAYLOAD&X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=RWJAQUNCHT7V2NCLZ2AL%2F20250625%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250625T014924Z&X-Amz-SignedHeaders=host&X-Amz-Expires=3600&X-Amz-Signature=89052fa3f2457dded1266a4ae4243de80ce985e576c3b27769be47cf107e63f4";
+      sha256 = "1kqzw8ajm2hvn1fa0xbx977amq0jblkd2ipsxw7qrb9i0cxm6j6c";
+    }}";};
+  };
+
+  gtk = {
+    enable = true;
+    theme = {
+      name = "Dracula";
+    };
+    iconTheme = {
+      name = "Tela-circle-dark";
+    };
+  };
 
   programs.git = {
     enable = true;
@@ -55,6 +79,16 @@
         show_milliseconds = false;
         format = "[took](bold purple) [$duration]($style) at ";
       };
+    };
+  };
+
+  programs.kitty = {
+    enable = true;
+    theme = "Dracula";
+    settings = {
+      confirm_os_window_close = 0; 
+      font_size = 14;
+      font_family = "FiraMono Nerd Font Mono";
     };
   };
 
@@ -98,10 +132,13 @@
       Context.filesystems = [
         "xdg-config/gtk-4.0"
         "xdg-config/gtk-3.0"
+        "/home/travis/.themes"
+        "/home/travis/.icons"
       ];
       Environment = {
         XCURSOR_PATH = "/run/host/user-share/icons:/run/host/share/icons";
-        GTK_THEME = "Breeze";
+        GTK_THEME = "Dracula";
+        ICON_THEME = "Tela-circle-dark";
       };
     };
   };
@@ -109,11 +146,34 @@
   programs.vscode = {
     enable = true;
     extensions = with pkgs.vscode-extensions; [
+      dracula-theme.theme-dracula
       jnoortheen.nix-ide
       vscodevim.vim
       tamasfe.even-better-toml 
       rust-lang.rust-analyzer 
     ];
+    userSettings = {
+      "workbench.colorTheme" = "Dracula Theme";
+      "window.titleBarStyle" = "native";
+      "window.menuBarVisibility" = "toggle";
+      "window.customTitleBarVisibility" = "never";
+    };
+  };
+
+  programs.plasma = {
+    enable = true;
+    workspace = {
+      wallpaper = "${pkgs.fetchurl {
+        url = "https://raw.githubusercontent.com/tahuffman1s/Wallpapers/refs/heads/main/nix.jpg";
+        sha256 = "I7Daq4rI7f09V6uctWr0yIzspDI/K4PBObsm3Vp2fqc=";
+      }}";
+      iconTheme = "Tela-circle-dark";
+    };
+    hotkeys.commands."launch-kitty" = {
+      name = "Launch Kitty";
+      key = "Ctrl+Alt+T";
+      command = "kitty";
+    };
   };
   
   home.stateVersion = "25.05";
