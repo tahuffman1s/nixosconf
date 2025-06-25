@@ -13,17 +13,12 @@
   # Bootloader.
   boot.loader.systemd-boot.enable = true;
   boot.loader.efi.canTouchEfiVariables = true;
+  boot.loader.systemd-boot.consoleMode = "max"; 
 
   boot = {
-
       plymouth = {
         enable = true;
-        theme = "rings";
-        themePackages = with pkgs; [
-          (adi1090x-plymouth-themes.override {
-            selected_themes = [ "rings" ];
-          })
-        ];
+        extraConfig = "DeviceScale=1";
       };
 
       consoleLogLevel = 3;
