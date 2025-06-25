@@ -16,21 +16,27 @@
   boot.loader.systemd-boot.consoleMode = "max"; 
 
   boot = {
-      plymouth = {
-        enable = true;
-        extraConfig = "DeviceScale=1";
-      };
-
-      consoleLogLevel = 3;
-      initrd.verbose = false;
-      kernelParams = [
-        "quiet"
-        "splash"
-        "boot.shell_on_fail"
-        "udev.log_priority=3"
-        "rd.systemd.show_status=auto"
+    plymouth = {
+      enable = true;
+      theme = "rings";
+      themePackages = with pkgs; [
+        (adi1090x-plymouth-themes.override {
+          selected_themes = [ "rings" ];
+        })
       ];
-      loader.timeout = 0;
+      extraConfig = "DeviceScale=1";
+    };
+
+    consoleLogLevel = 3;
+    initrd.verbose = false;
+    kernelParams = [
+      "quiet"
+      "splash"
+      "boot.shell_on_fail"
+      "udev.log_priority=3"
+      "rd.systemd.show_status=auto"
+    ];
+    loader.timeout = 0;
   };
 
 
