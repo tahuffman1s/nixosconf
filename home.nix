@@ -92,11 +92,12 @@ in
 
   programs.kitty = {
     enable = true;
-    theme = "Dracula";
+    themeFile = "Dracula";
     settings = {
       confirm_os_window_close = 0; 
-      font_size = 14;
+      font_size = 12;
       font_family = "FiraMono Nerd Font Mono";
+      background_opacity = 0.7;
     };
   };
 
@@ -109,7 +110,7 @@ in
     interactiveShellInit = ''
       set fish_greeting
       alias fetch=fastfetch
-      alias update="sudo nixos-rebuild switch"
+      alias update="rm ~/.gtkrc-2.0; sudo nixos-rebuild switch"
       alias cd=z
       alias flake="code /etc/nixos/flake.nix"
       alias conf="code /etc/nixos/configuration.nix"
@@ -128,6 +129,9 @@ in
     "org.gtk.Gtk3theme.Breeze"
     "com.calibre_ebook.calibre"
     "net.filebot.FileBot"
+    "com.jeffser.Alpaca"
+    "com.jeffser.Alpaca.Plugins.Ollama" 
+    "com.jeffser.Alpaca.Plugins.AMD"
     rec {
       appId = "org.tahuffman1s.rsensor";
       sha256 = "DCz/EYAHIyEenRtwOB7b+yXylduX+wRaR/58vZ4JKzI=";
@@ -168,7 +172,8 @@ in
       "window.titleBarStyle" = "native";
       "window.menuBarVisibility" = "toggle";
       "window.customTitleBarVisibility" = "never";
-      "editor.fontFamily" = "'FiraMono Nerd Font Mono', 'monospace', monospace";
+      "editor.fontFamily" = "'FiraMono Nerd Font Mono', 'monospace', monospace";    
+      "git.openRepositoryInParentFolders" = "always";
     };
   };
 
@@ -190,6 +195,43 @@ in
       key = "Ctrl+Alt+T";
       command = "kitty";
     };
+    panels = [
+      {
+        location = "bottom";
+        floating = true;
+        screen = 0;
+        widgets = [
+          {
+            kickoff = {
+              sortAlphabetically = true;
+              icon = "nix-snowflake-white";
+            };
+          }
+          "org.kde.plasma.marginsseparator"
+          "org.kde.plasma.panelspacer"
+          {
+            iconTasks = {
+              launchers = [
+                "applications:org.kde.dolphin.desktop"
+                "applications:zen.desktop"
+                "applications:code.desktop"
+                "applications:steam.desktop"
+                "applications:signal.desktop"
+              ];
+            };
+          }
+          "org.kde.plasma.panelspacer"
+          "org.kde.plasma.marginsseparator"
+          "org.kde.plasma.systemtray"
+          {
+            digitalClock = {
+              calendar.firstDayOfWeek = "sunday";
+              time.format = "12h";
+            };
+          }
+        ];
+      }
+    ];
   };
   
   home.stateVersion = "25.05";
