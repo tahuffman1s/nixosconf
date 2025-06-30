@@ -29,6 +29,9 @@ in
     fooyin
     handbrake
     freetube
+    corefonts
+    vistafonts
+    libreoffice
     makemkv
     vlc
     jellyfin-media-player
@@ -112,11 +115,11 @@ in
       alias fetch=fastfetch
       alias update="rm ~/.gtkrc-2.0; sudo nixos-rebuild switch"
       alias cd=z
-      alias flake="code /etc/nixos/flake.nix"
-      alias conf="code /etc/nixos/configuration.nix"
-      alias home="code /etc/nixos/home.nix"
+      alias flake="codium /etc/nixos/flake.nix"
+      alias conf="codium /etc/nixos/configuration.nix"
+      alias home="codium /etc/nixos/home.nix"
       alias genConf="sudo nixos-generate-config"
-      alias ship="code ~/.config/starship.toml"
+      alias ship="codium ~/.config/starship.toml"
       alias genHardware="sudo nixos-generate-config"
       alias wipeass="journalctl -xe --unit home-manager-travis"
     '';
@@ -160,6 +163,7 @@ in
 
   programs.vscode = {
     enable = true;
+    package = pkgs.vscodium;
     extensions = with pkgs.vscode-extensions; [
       dracula-theme.theme-dracula
       jnoortheen.nix-ide
@@ -214,7 +218,7 @@ in
               launchers = [
                 "applications:org.kde.dolphin.desktop"
                 "applications:zen.desktop"
-                "applications:code.desktop"
+                "applications:codium.desktop"
                 "applications:steam.desktop"
                 "applications:signal.desktop"
               ];
