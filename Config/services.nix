@@ -23,4 +23,4 @@ in
     enable = true;
     openFirewall = true;
   };
-u
+}
