@@ -1,0 +1,25 @@
+{ config, pkgs, ...}:
+let 
+in 
+{
+  home.packages = with pkgs; [
+    fastfetch
+    signal-desktop
+    mangohud
+    gamemode
+    gamescope
+    qbittorrent
+    fooyin
+    handbrake
+    freetube
+    corefonts
+    vistafonts
+    libreoffice
+    makemkv
+    vlc
+    jellyfin-media-player
+    dracula-theme
+    nerd-fonts.fira-mono
+    kdePackages.breeze-gtk
+  ];  
+}

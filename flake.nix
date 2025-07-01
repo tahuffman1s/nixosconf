@@ -30,7 +30,7 @@
           home-manager.useGlobalPkgs = true;
           home-manager.useUserPackages = true;
           home-manager.users.travis.imports = [
-            ./home.nix
+            ./Home/home.nix
             plasma-manager.homeManagerModules.plasma-manager
             nix-flatpak.homeManagerModules.nix-flatpak
           ];
