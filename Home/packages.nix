@@ -1,4 +1,4 @@
-{ config, pkgs, ...}:
+{ config, pkgs, inputs, ...}:
 let 
 in 
 {
@@ -21,5 +21,6 @@ in
     dracula-theme
     nerd-fonts.fira-mono
     kdePackages.breeze-gtk
+    inputs.zen-browser.packages.${pkgs.system}.default
   ];  
 }

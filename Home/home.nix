@@ -12,6 +12,7 @@ in
    ../Apps/zoxide.nix
    ../Apps/flatpaks.nix
    ../Apps/vscodium.nix
+   ../Apps/gimp.nix
    ../Theme/plasma.nix
    ../Theme/gtk.nix
   ];

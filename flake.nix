@@ -8,6 +8,10 @@
       url = "github:youwen5/zen-browser-flake";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    nix-photogimp = {
+      url = "github:Libadoxon/nix-photo-gimp";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
     home-manager = {
       url = "github:nix-community/home-manager/release-25.05";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -29,6 +33,7 @@
 	      { 
           home-manager.useGlobalPkgs = true;
           home-manager.useUserPackages = true;
+          home-manager.extraSpecialArgs = { inherit inputs; };
           home-manager.users.travis.imports = [
             ./Home/home.nix
             plasma-manager.homeManagerModules.plasma-manager
