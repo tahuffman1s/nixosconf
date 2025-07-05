@@ -20,7 +20,8 @@ in
     jellyfin-media-player
     dracula-theme
     nerd-fonts.fira-mono
-    kdePackages.breeze-gtk
+    libreoffice-qt6-fresh
+    obsidian
     inputs.zen-browser.packages.${pkgs.system}.default
   ];  
 }

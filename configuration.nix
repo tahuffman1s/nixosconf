@@ -12,7 +12,6 @@
       ./Config/networking.nix
       ./Config/environment.nix
       ./Config/nixsettings.nix
-      ./Apps/firefox.nix
       ./Apps/bash.nix
       ./Apps/steam.nix
     ];

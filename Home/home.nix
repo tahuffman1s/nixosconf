@@ -13,6 +13,7 @@ in
    ../Apps/flatpaks.nix
    ../Apps/vscodium.nix
    ../Apps/gimp.nix
+   ../Apps/firefox.nix
    ../Theme/plasma.nix
    ../Theme/gtk.nix
   ];

@@ -4,5 +4,10 @@ in
 {
   networking.hostName = "nixos"; #
   networking.networkmanager.enable = true;
-  networking.firewall.allowedTCPPorts = [ 24800 ];
+  networking.firewall.allowedTCPPorts = [ 24800 27015 27036 ];
+  networking.firewall.allowedUDPPorts = [ 8766 9700 ];
+  networking.firewall.allowedUDPPortRanges = [
+    { from = 27015; to = 27016; }
+    { from = 27031; to = 27036; }
+  ];
 }

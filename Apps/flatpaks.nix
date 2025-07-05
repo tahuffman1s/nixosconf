@@ -6,12 +6,8 @@ in
   services.flatpak.packages = [
     "io.github.input_leap.input-leap"
     "com.protonvpn.www"
-    "org.gtk.Gtk3theme.Breeze"
     "com.calibre_ebook.calibre"
     "net.filebot.FileBot"
-    "com.jeffser.Alpaca"
-    "com.jeffser.Alpaca.Plugins.Ollama" 
-    "com.jeffser.Alpaca.Plugins.AMD"
     rec {
       appId = "org.tahuffman1s.rsensor";
       sha256 = "DCz/EYAHIyEenRtwOB7b+yXylduX+wRaR/58vZ4JKzI=";
