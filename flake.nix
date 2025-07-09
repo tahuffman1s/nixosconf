@@ -21,6 +21,10 @@
       inputs.nixpkgs.follows = "nixpkgs";
       inputs.home-manager.follows = "home-manager";
     };
+    durdraw = {
+      url = "github:tahuffman1s/durdraw-flake";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs = { self, nixpkgs, home-manager, nix-flatpak, plasma-manager, ... }@inputs: {
