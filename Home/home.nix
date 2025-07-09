@@ -14,6 +14,7 @@ in
    ../Apps/vscodium.nix
    ../Apps/gimp.nix
    ../Apps/firefox.nix
+   ../Apps/durdraw.nix
    ../Theme/plasma.nix
    ../Theme/gtk.nix
   ];

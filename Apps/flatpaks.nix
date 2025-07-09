@@ -8,14 +8,6 @@ in
     "com.protonvpn.www"
     "com.calibre_ebook.calibre"
     "net.filebot.FileBot"
-    rec {
-      appId = "org.tahuffman1s.rsensor";
-      sha256 = "DCz/EYAHIyEenRtwOB7b+yXylduX+wRaR/58vZ4JKzI=";
-      bundle = "${pkgs.fetchurl {
-        url = "https://github.com/tahuffman1s/rsensor/releases/download/0.1.0/rsensor.flatpak";
-        sha256 = sha256;
-      }}";
-    }
   ];
 
   services.flatpak.overrides = {
