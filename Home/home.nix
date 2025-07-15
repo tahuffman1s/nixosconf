@@ -15,6 +15,7 @@ in
    ../Apps/gimp.nix
    ../Apps/firefox.nix
    ../Apps/durdraw.nix
+   ../Apps/spotifyd.nix
    ../Theme/plasma.nix
    ../Theme/gtk.nix
   ];

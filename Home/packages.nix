@@ -23,6 +23,7 @@ in
     libreoffice-qt6-fresh
     obsidian
     via
+    spotify-qt
     inputs.rsensor.packages.${pkgs.system}.default
     inputs.zen-browser.packages.${pkgs.system}.default
   ];  

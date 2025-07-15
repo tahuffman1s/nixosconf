@@ -11,6 +11,7 @@ in
      jellyfin
      jellyfin-web
      jellyfin-ffmpeg
+     spotifyd
      openssl
      linuxKernel.packages.linux_6_15.xone
   ];
