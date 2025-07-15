@@ -22,6 +22,7 @@ in
     nerd-fonts.fira-mono
     libreoffice-qt6-fresh
     obsidian
+    via
     inputs.rsensor.packages.${pkgs.system}.default
     inputs.zen-browser.packages.${pkgs.system}.default
   ];  

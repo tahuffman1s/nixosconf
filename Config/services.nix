@@ -3,6 +3,7 @@ let
 in 
 {
   services.xserver.enable = true;
+  services.udev.packages = [ pkgs.via ];
   services.displayManager.sddm.enable = true;
   services.desktopManager.plasma6.enable = true;
   services.flatpak.enable = true;
