@@ -24,6 +24,7 @@ in
     obsidian
     via
     spotify-qt
+    nicotine-plus
     inputs.rsensor.packages.${pkgs.system}.default
     inputs.zen-browser.packages.${pkgs.system}.default
   ];  

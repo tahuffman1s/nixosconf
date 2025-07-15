@@ -50,7 +50,7 @@ in
                 "applications:codium.desktop"
                 "applications:steam.desktop"
                 "applications:signal.desktop"
-                "applications:spotify-qt"
+                "applications:spotify-qt.desktop"
               ];
             };
           }
