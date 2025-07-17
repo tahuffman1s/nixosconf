@@ -5,7 +5,6 @@ in
   services.flatpak.update.auto.enable = true;
   services.flatpak.packages = [
     "io.github.input_leap.input-leap"
-    "com.protonvpn.www"
     "com.calibre_ebook.calibre"
     "net.filebot.FileBot"
   ];

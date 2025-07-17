@@ -25,6 +25,21 @@ in
     via
     spotify-qt
     nicotine-plus
+    vulkan-tools
+    kando
+    cemu
+    dolphin-emu
+    duckstation
+    rpcs3
+    ppsspp-qt
+    pcsx2
+    mgba
+    ryujinx
+    gearlever
+    protonvpn-gui
+    solaar
+    melonDS
+    shipwright
     inputs.rsensor.packages.${pkgs.system}.default
     inputs.zen-browser.packages.${pkgs.system}.default
   ];  

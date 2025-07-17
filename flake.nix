@@ -28,16 +28,20 @@
     durdraw = {
       url = "github:tahuffman1s/durdraw-flake";
       inputs.nixpkgs.follows = "nixpkgs";
-      inputs.home-manager.follows = "home-manager";
+    };
+    lsfg-vk-flake = {
+      url = "github:pabloaul/lsfg-vk-flake/main";
+      inputs.nixpkgs.follows = "nixpkgs";
     };
   };
 
-  outputs = { self, nixpkgs, home-manager, nix-flatpak, plasma-manager, durdraw, ... }@inputs: {
+  outputs = { self, nixpkgs, home-manager, nix-flatpak, plasma-manager, durdraw, lsfg-vk-flake, ... }@inputs: {
     nixosConfigurations.nixos = nixpkgs.lib.nixosSystem {
       system = "x86_64-linux";
       specialArgs = { inherit inputs; };
       modules = [
         ./configuration.nix
+        lsfg-vk-flake.nixosModules.default
         home-manager.nixosModules.home-manager 
 	      { 
           home-manager.useGlobalPkgs = true;
