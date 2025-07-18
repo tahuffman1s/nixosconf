@@ -34,11 +34,12 @@ in
     ppsspp-qt
     pcsx2
     mgba
-    ryujinx
     gearlever
     protonvpn-gui
     solaar
     melonDS
+    steam-rom-manager
+    ryubing
     shipwright
     inputs.rsensor.packages.${pkgs.system}.default
     inputs.zen-browser.packages.${pkgs.system}.default
