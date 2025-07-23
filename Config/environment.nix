@@ -22,6 +22,7 @@ in
      python312Packages.ttkbootstrap
      python312Full
      unzip
+     p7zip
      pipx
   ];
   environment.variables = { 

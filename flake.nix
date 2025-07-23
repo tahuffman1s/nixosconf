@@ -1,6 +1,6 @@
 {
   description = "My Configuration Flake";
-
+  
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     nix-flatpak.url = "github:gmodena/nix-flatpak";
@@ -33,17 +33,21 @@
       url = "github:pabloaul/lsfg-vk-flake/main";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    kurve-flake = {
+      url = "github:tahuffman1s/kdePackages-kurve-flake";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
-
-  outputs = { self, nixpkgs, home-manager, nix-flatpak, plasma-manager, durdraw, lsfg-vk-flake, ... }@inputs: {
+  
+  outputs = { self, nixpkgs, home-manager, nix-flatpak, plasma-manager, durdraw, lsfg-vk-flake, kurve-flake, ... }@inputs: {
     nixosConfigurations.nixos = nixpkgs.lib.nixosSystem {
       system = "x86_64-linux";
       specialArgs = { inherit inputs; };
       modules = [
         ./configuration.nix
         lsfg-vk-flake.nixosModules.default
-        home-manager.nixosModules.home-manager 
-	      { 
+        home-manager.nixosModules.home-manager
+        {
           home-manager.useGlobalPkgs = true;
           home-manager.useUserPackages = true;
           home-manager.extraSpecialArgs = { inherit inputs; };
