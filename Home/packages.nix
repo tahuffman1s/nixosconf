@@ -2,46 +2,20 @@
 let 
 in 
 {
+  # Native packages only. Everything with a Flathub build lives in
+  # Apps/flatpaks.nix instead.
   home.packages = with pkgs; [
     fastfetch
-    signal-desktop
     mangohud
-    gamemode
     gamescope
-    qbittorrent
-    fooyin
-    handbrake
-    freetube
-    corefonts
-    vistafonts
-    libreoffice
-    makemkv
-    vlc
-    jellyfin-media-player
-    dracula-theme
-    nerd-fonts.fira-mono
-    libreoffice-qt6-fresh
-    obsidian
-    via
-    spotify-qt
-    nicotine-plus
     vulkan-tools
-    kando
-    cemu
-    dolphin-emu
-    duckstation
-    rpcs3
-    ppsspp-qt
-    pcsx2
-    mgba
-    gearlever
-    protonvpn-gui
-    solaar
-    melonDS
-    steam-rom-manager
-    ryubing
-    shipwright
-    inputs.rsensor.packages.${pkgs.system}.default
-    inputs.zen-browser.packages.${pkgs.system}.default
+    corefonts
+    vista-fonts
+    nerd-fonts.fira-mono
+    dracula-theme
+    via
+    spotify-qt   # not on Flathub
+    shipwright   # not on Flathub
+    inputs.rsensor.packages.${pkgs.stdenv.hostPlatform.system}.default
   ];  
 }

@@ -9,7 +9,7 @@ in
         enable = true;
         binfmt = true;
         package = pkgs.appimage-run.override {
-          extraPkgs = pkgs: [ pkgs.xorg.libxshmfence ];
+          extraPkgs = pkgs: [ pkgs.libxshmfence ];
         };
       };
   };

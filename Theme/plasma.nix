@@ -1,13 +1,15 @@
 { config, pkgs, ...}:
 let 
-  kdeTheme = builtins.fetchTarball {
-    url = "https://github.com/tahuffman1s/nixosconf/raw/refs/heads/main/Files/Draculakde.tar.xz";
-    sha256 = "16jb6z2x0wmdnlk7lxpa57a36vw8571idfcn3gv9zdps0y68583x";
-  };
+  # Shipped in this repo (Files/), unpacked in a derivation instead of being
+  # downloaded from GitHub at evaluation time.
+  kdeTheme = pkgs.runCommand "dracula-kde-theme" { } ''
+    mkdir -p "$out"
+    tar --warning=no-unknown-keyword -xJf ${../Files/Draculakde.tar.xz} -C "$out"
+  '';
 in 
 {
   home.file = {
-    ".local/share/themes/Dracula" = {source ="${kdeTheme}";};
+    ".local/share/themes/Dracula" = {source ="${kdeTheme}/Dracula";};
   };
 
   programs.plasma = {
@@ -46,10 +48,10 @@ in
             iconTasks = {
               launchers = [
                 "applications:org.kde.dolphin.desktop"
-                "applications:zen.desktop"
+                "applications:app.zen_browser.zen.desktop"
                 "applications:codium.desktop"
                 "applications:steam.desktop"
-                "applications:signal.desktop"
+                "applications:org.signal.Signal.desktop"
                 "applications:spotify-qt.desktop"
               ];
             };

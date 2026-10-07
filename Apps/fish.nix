@@ -7,15 +7,15 @@ in
     interactiveShellInit = ''
       set fish_greeting
       alias fetch=fastfetch
-      alias swap="rm ~/.gtkrc-2.0; sudo nixos-rebuild switch"
+      alias swap="rm ~/.gtkrc-2.0; sudo nixos-rebuild switch --flake /etc/nixos"
       alias cd=z
       alias flake="codium /etc/nixos/flake.nix"
       alias conf="codium /etc/nixos/configuration.nix"
-      alias home="codium /etc/nixos/home.nix"
+      alias home="codium /etc/nixos/Home/home.nix"
       alias genConf="sudo nixos-generate-config"
       alias ship="codium ~/.config/starship.toml"
       alias genHardware="sudo nixos-generate-config"
-      alias update="cd /etc/nixos; sudo nixos-rebuild switch --recreate-lock-file --flake ."
+      alias update="cd /etc/nixos; sudo nix flake update; sudo nixos-rebuild switch --flake ."
       alias wipeass="journalctl -xe --unit home-manager-travis"
     '';
   };

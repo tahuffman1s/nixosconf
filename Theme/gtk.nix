@@ -1,13 +1,13 @@
 { config, pkgs, ...}:
 let 
-  gtkTheme = builtins.fetchTarball {
-    url = "https://github.com/tahuffman1s/nixosconf/raw/refs/heads/main/Files/Dracula.tar.xz";
-    sha256 = "1xrbv4nw918xjm79qpwlbyviis7s86d4pn4j68ll0iqjic0fzkxa";
-  };
-  iconTheme = builtins.fetchTarball {
-    url = "https://github.com/tahuffman1s/nixosconf/raw/refs/heads/main/Files/Tela-circle-dracula.tar.xz";
-    sha256 = "1kqzw8ajm2hvn1fa0xbx977amq0jblkd2ipsxw7qrb9i0cxm6j6c";
-  };
+  # The theme archives are shipped in this repo (Files/), so unpack them in a
+  # derivation instead of downloading them from GitHub at evaluation time.
+  unpack = name: src: pkgs.runCommand name { } ''
+    mkdir -p "$out"
+    tar --warning=no-unknown-keyword -xJf ${src} -C "$out"
+  '';
+  gtkTheme = unpack "dracula-gtk-theme" ../Files/Dracula.tar.xz;
+  iconTheme = unpack "tela-circle-dracula-icons" ../Files/Tela-circle-dracula.tar.xz;
 in 
 {
   home.file = {
@@ -21,6 +21,8 @@ in
     theme = {
       name = "Dracula";
     };
+    # Keep applying the same theme to GTK4 apps (new home-manager default is none).
+    gtk4.theme = config.gtk.theme;
     iconTheme = {
       name = "Tela-circle-dark";
     };
