@@ -15,6 +15,7 @@
       ./Config/nixsettings.nix
       ./Apps/bash.nix
       ./Apps/steam.nix
+      ./Apps/zen.nix
     ];
   system.stateVersion = "25.11";
 }
