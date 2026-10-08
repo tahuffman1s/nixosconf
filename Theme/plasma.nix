@@ -25,6 +25,8 @@ in
       }}";
       iconTheme = "Tela-circle-dracula";
     };
+    # Let fullscreen games bypass the compositor's vsync for lower latency.
+    configFile.kwinrc.Wayland.AllowTearing = true;
     hotkeys.commands."launch-kitty" = {
       name = "Launch Kitty";
       key = "Ctrl+Alt+T";

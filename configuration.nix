@@ -7,6 +7,7 @@
       ./Config/plymouth.nix
       ./Config/boot.nix
       ./Config/hardware.nix
+      ./Config/gaming.nix
       ./Config/locale.nix
       ./Config/services.nix
       ./Config/users.nix
