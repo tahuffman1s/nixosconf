@@ -83,11 +83,31 @@ write_as_user() { # path, content on stdin
 }
 
 # git is not installed on a fresh NixOS; borrow it from nixpkgs if needed.
-if command -v git >/dev/null 2>&1 || [ "$DRY_RUN" = 1 ]; then
+# Tries the flake registry first, then the nixos channel the installer set up.
+find_git() {
+  if command -v git >/dev/null 2>&1; then
+    command -v git
+    return 0
+  fi
+  local out=""
+  out="$(nix build --no-link --print-out-paths "nixpkgs#git^out" 2>/dev/null)" || out=""
+  if [ -z "$out" ]; then
+    out="$(nix-build --no-out-link '<nixpkgs>' -A git 2>/dev/null)" || out=""
+  fi
+  if [ -n "$out" ] && [ -x "$out/bin/git" ]; then
+    echo "$out/bin/git"
+    return 0
+  fi
+  return 1
+}
+
+if command -v git >/dev/null 2>&1; then
+  GIT="$(command -v git)"
+elif [ "$DRY_RUN" = 1 ]; then
   GIT=git
 else
   say "git is not installed, fetching it from nixpkgs"
-  GIT="$(nix build --no-link --print-out-paths nixpkgs#git)/bin/git"
+  GIT="$(find_git)" || die "Could not get git from nixpkgs. Check the network, then rerun."
 fi
 
 # ---------------------------------------------------------------------------
@@ -230,8 +250,8 @@ fi
 # gitconfig has to do it, so run the build with HOME=/root.
 # libgit2 matches safe.directory against the resolved path of the repo.
 real_dir="$(readlink -f "$DIR" 2>/dev/null || echo "$DIR")"
-if ! git config --file /root/.gitconfig --get-all safe.directory 2>/dev/null | grep -qx "$real_dir"; then
-  run git config --file /root/.gitconfig --add safe.directory "$real_dir"
+if ! "$GIT" config --file /root/.gitconfig --get-all safe.directory 2>/dev/null | grep -qx "$real_dir"; then
+  run "$GIT" config --file /root/.gitconfig --add safe.directory "$real_dir"
 fi
 
 # ---------------------------------------------------------------------------
