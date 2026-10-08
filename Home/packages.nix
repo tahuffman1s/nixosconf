@@ -5,7 +5,6 @@ in
   # Native packages only. Desktop apps live in Apps/flatpaks.nix instead.
   home.packages = with pkgs; [
     fastfetch
-    mangohud
     gamescope
     vulkan-tools
     corefonts

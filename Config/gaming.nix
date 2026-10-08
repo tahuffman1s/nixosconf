@@ -27,9 +27,25 @@ in
   };
   services.lact.enable = true;
 
+  # Full kernel preemption: lower latency for a little throughput.
+  boot.kernelParams = [ "preempt=full" ];
+
+  # zram is much faster than disk swap, so let the kernel use it readily.
+  boot.kernel.sysctl."vm.swappiness" = 180;
+
+  # Mesa's default 1 GB shader cache is too small for big titles; without this
+  # they recompile shaders on later launches.
+  environment.sessionVariables.MESA_SHADER_CACHE_MAX_SIZE = "10G";
+
   programs.steam = {
     # Proton-GE alongside Valve's Proton; pick it per game in Steam.
     extraCompatPackages = [ pkgs.proton-ge-bin ];
+    # Deck-style Big Picture session, selectable at the login screen.
+    gamescopeSession.enable = true;
+    # Makes Steam Input's mouse/keyboard emulation work under Wayland.
+    extest.enable = true;
+    # winetricks for Proton prefixes.
+    protontricks.enable = true;
     # Firewall ports for Remote Play, LAN game transfers and a dedicated
     # server, instead of hand-maintained port lists in networking.nix.
     remotePlay.openFirewall = true;

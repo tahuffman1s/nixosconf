@@ -24,6 +24,10 @@ in
     "it.mijorus.gearlever"
     "com.protonvpn.www"
     "io.github.input_leap.input-leap"
+    # Gaming
+    "com.heroicgameslauncher.hgl"
+    "net.davidotek.pupgui2"
+    "com.dec05eba.gpu_screen_recorder"
   ];
 
   services.flatpak.overrides = {
