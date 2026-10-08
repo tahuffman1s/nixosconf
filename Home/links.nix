@@ -32,10 +32,11 @@ in
   home.activation.replaceHomeDirs = lib.hm.dag.entryBefore [ "checkLinkTargets" ] ''
     if [ -z "$HOME" ]; then
       echo "links.nix: HOME is not set, skipping" >&2
-    elif ! ${pkgs.util-linux}/bin/mountpoint -q /mnt/GD2 || [ ! -d "${backup}" ]; then
-      echo "links.nix: ${backup} is not available, leaving home folders alone" >&2
+    elif ! ${pkgs.util-linux}/bin/mountpoint -q /mnt/GD2; then
+      echo "links.nix: /mnt/GD2 is not mounted, leaving home folders alone" >&2
     else
       # Make sure every link has somewhere to point.
+      run mkdir -p "${backup}"
       for target in ${lib.escapeShellArgs (map (t: "${backup}/${t}") (lib.attrValues links))}; do
         run mkdir -p "$target"
       done

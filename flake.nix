@@ -55,6 +55,9 @@
         {
           home-manager.useGlobalPkgs = true;
           home-manager.useUserPackages = true;
+          # Plasma writes files like ~/.gtkrc-2.0 before home-manager runs;
+          # move them aside instead of failing on "file in the way".
+          home-manager.backupFileExtension = "hm-backup";
           home-manager.extraSpecialArgs = { inherit inputs user; };
           home-manager.users.${user.name}.imports = [
             ./Home/home.nix

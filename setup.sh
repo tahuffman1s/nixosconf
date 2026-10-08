@@ -16,7 +16,11 @@
 #   NIXOSCONF_USER              account to set up          (default: the sudo user)
 #   NIXOSCONF_REGEN_HARDWARE=1  rewrite hardware-configuration.nix and drives.nix
 #                               on an existing clone (always done on a fresh one)
+#   NIXOSCONF_NO_REBOOT=1       do not reboot at the end
 #   DRY_RUN=1                   print the state-changing steps instead of running them
+#
+# After a plain NixOS install this is the only step: it ends by installing the
+# Flatpaks and rebooting into the new system.
 
 set -euo pipefail
 
@@ -62,6 +66,7 @@ passwd_entry="$(getent passwd "$USER_NAME" || true)"
 HOME_DIR="$(printf '%s' "$passwd_entry" | cut -d: -f6)"
 FULL_NAME="$(printf '%s' "$passwd_entry" | cut -d: -f5 | cut -d, -f1)"
 [ -n "$FULL_NAME" ] || FULL_NAME="$USER_NAME"
+HOME_DIR="${NIXOSCONF_HOME_DIR:-$HOME_DIR}"
 DIR="${NIXOSCONF_DIR:-$HOME_DIR/nixosconf}"
 
 say "Setting up for user $USER_NAME ($FULL_NAME), config in $DIR"
@@ -187,6 +192,21 @@ else
   say "Keeping the existing hardware-configuration.nix and drives.nix (NIXOSCONF_REGEN_HARDWARE=1 to redo)"
 fi
 
+# Mount the data drives now rather than after the reboot, so the first build
+# can already link the home folders into /mnt/GD2/Backup.
+if [ -f "$DIR/drives.nix" ]; then
+  while read -r mnt uuid; do
+    [ -n "$mnt" ] && [ -n "$uuid" ] || continue
+    if mountpoint -q "$mnt" 2>/dev/null; then
+      say "$mnt is already mounted"
+    else
+      say "Mounting $mnt"
+      run mkdir -p "$mnt"
+      run mount "UUID=$uuid" "$mnt" || warn "Could not mount $mnt now; it will be mounted after the reboot"
+    fi
+  done < <(awk '/fileSystems\."\/mnt\// { gsub(/.*fileSystems\."|".*/, ""); m=$0 } /by-uuid/ { gsub(/.*by-uuid\/|".*/, ""); print m, $0 }' "$DIR/drives.nix")
+fi
+
 # ---------------------------------------------------------------------------
 # 4. /etc/nixos -> the checkout
 
@@ -220,6 +240,26 @@ fi
 say "Building and switching to the new system (the first run downloads several GB)"
 run env HOME=/root nixos-rebuild switch --flake "${LINK}#${FLAKE_HOST}"
 
+# ---------------------------------------------------------------------------
+# 6. Flatpaks
+
+# home-manager's user service installs them at the next login. Run that same
+# script now so everything is in place after the reboot.
+unit="$HOME_DIR/.config/systemd/user/flatpak-managed-install.service"
+if [ "$DRY_RUN" = 1 ]; then
+  run "<ExecStart of $unit, as $USER_NAME>"
+elif [ -f "$unit" ]; then
+  read -r -a installer <<<"$(sed -n 's/^ExecStart=//p' "$unit" | head -1)"
+  say "Installing the Flatpaks from Apps/flatpaks.nix (this is the slow part)"
+  sudo -u "$USER_NAME" -H env XDG_RUNTIME_DIR="/run/user/$(id -u "$USER_NAME")" "${installer[@]}" \
+    || warn "Flatpak install did not finish; it runs again at login and on the next topgrade"
+else
+  warn "Flatpak installer not found; the Flatpaks will be installed at the next login"
+fi
+
+# ---------------------------------------------------------------------------
+# 7. Reboot
+
 say "Done."
 cat <<MSG
 
@@ -227,7 +267,14 @@ cat <<MSG
   Update:    topgrade          (refreshes flake inputs, rebuilds, updates flatpaks)
   Rebuild:   sudo nixos-rebuild switch --flake $LINK
 
-  Flatpaks from Apps/flatpaks.nix are installed by a user service the next
-  time $USER_NAME logs in (it needs network access). Home folders are only
-  linked into /mnt/GD2/Backup once that drive is mounted.
 MSG
+
+if [ "${NIXOSCONF_NO_REBOOT:-0}" = 1 ]; then
+  say "Reboot to finish (new kernel, scheduler and drivers)."
+elif [ "$DRY_RUN" = 1 ]; then
+  run reboot
+else
+  say "Rebooting in 15 seconds into the new system (Ctrl-C to stay)."
+  sleep 15
+  reboot
+fi

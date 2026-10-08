@@ -12,12 +12,16 @@ On a NixOS machine, from your own account:
 curl -fsSL https://raw.githubusercontent.com/tahuffman1s/nixosconf/main/setup.sh | sudo bash
 ```
 
-The script builds the config for the account that ran `sudo`. It clones this
-repo into `~/nixosconf` (owned by you), points `/etc/nixos` at it, writes
-`user.nix` with your account name, generates `hardware-configuration.nix`, finds
-the GD1 and GD2 drives for `drives.nix` (by current mount, filesystem label,
-known UUID, or by asking), and runs `nixos-rebuild switch --flake /etc/nixos`.
+That is the only step after a plain NixOS install. The script builds the
+config for the account that ran `sudo`. It clones this repo into `~/nixosconf`
+(owned by you), points `/etc/nixos` at it, writes `user.nix` with your account
+name, generates `hardware-configuration.nix`, finds the GD1 and GD2 drives for
+`drives.nix` (by current mount, filesystem label, known UUID, or by asking) and
+mounts them, runs `nixos-rebuild switch --flake /etc/nixos`, installs the
+Flatpaks, and reboots into the new system. Files that home-manager wants to
+own are moved aside with an `.hm-backup` suffix rather than stopping the build.
 Rerunning it on a machine that already has the clone just pulls and switches.
+Set `NIXOSCONF_NO_REBOOT=1` to skip the reboot.
 
 To use a branch other than `main`:
 

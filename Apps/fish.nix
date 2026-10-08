@@ -7,7 +7,7 @@ in
     interactiveShellInit = ''
       set fish_greeting
       alias fetch=fastfetch
-      alias swap="rm ~/.gtkrc-2.0; sudo nixos-rebuild switch --flake /etc/nixos"
+      alias swap="sudo nixos-rebuild switch --flake /etc/nixos"
       alias cd=z
       alias flake="codium /etc/nixos/flake.nix"
       alias conf="codium /etc/nixos/configuration.nix"
