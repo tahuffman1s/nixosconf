@@ -11,8 +11,4 @@ in
 
   hardware.xone.enable = true;
   hardware.keyboard.qmk.enable = true;
-
-  # Solaar and its udev rules for Logitech receivers.
-  hardware.logitech.wireless.enable = true;
-  programs.solaar.enable = true;
 }

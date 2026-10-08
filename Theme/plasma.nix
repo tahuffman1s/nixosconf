@@ -52,7 +52,7 @@ in
                 "applications:codium.desktop"
                 "applications:steam.desktop"
                 "applications:org.signal.Signal.desktop"
-                "applications:spotify-qt.desktop"
+                "applications:com.spotify.Client.desktop"
               ];
             };
           }

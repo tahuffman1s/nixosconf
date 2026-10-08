@@ -5,6 +5,7 @@ in
   imports = [
    ./packages.nix
    ./settings.nix
+   ./links.nix
    ../Apps/git.nix
    ../Apps/starship.nix
    ../Apps/kitty.nix
@@ -14,7 +15,6 @@ in
    ../Apps/vscodium.nix
    ../Apps/gimp.nix
    ../Apps/firefox.nix
-   ../Apps/durdraw.nix
    ../Apps/spotifyd.nix
    ../Theme/plasma.nix
    ../Theme/gtk.nix
