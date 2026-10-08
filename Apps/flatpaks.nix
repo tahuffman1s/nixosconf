@@ -24,6 +24,7 @@ in
     "it.mijorus.gearlever"
     "com.protonvpn.www"
     "io.github.input_leap.input-leap"
+    "org.localsend.localsend_app"
     # Gaming
     "com.heroicgameslauncher.hgl"
     "net.davidotek.pupgui2"
