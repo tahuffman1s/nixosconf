@@ -8,10 +8,6 @@ in
      wget
      kdePackages.partitionmanager
      ffmpeg
-     jellyfin
-     jellyfin-web
-     jellyfin-ffmpeg
-     spotifyd
      openssl
      python3
      python3Packages.pip

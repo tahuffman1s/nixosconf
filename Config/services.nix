@@ -21,8 +21,4 @@ in
     layout = "us";
     variant = "";
   };
-  services.jellyfin = {
-    enable = true;
-    openFirewall = true;
-  };
 }
