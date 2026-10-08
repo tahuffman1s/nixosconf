@@ -10,6 +10,7 @@
       ./Config/gaming.nix
       ./Config/locale.nix
       ./Config/services.nix
+      ./Config/printing.nix
       ./Config/users.nix
       ./Config/networking.nix
       ./Config/environment.nix

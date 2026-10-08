@@ -7,7 +7,6 @@ in
   services.displayManager.sddm.enable = true;
   services.desktopManager.plasma6.enable = true;
   services.flatpak.enable = true;
-  services.printing.enable = true;
   services.pulseaudio.enable = false;
   security.rtkit.enable = true;
   services.lsfg-vk.enable = true;
