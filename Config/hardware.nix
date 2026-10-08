@@ -9,6 +9,14 @@ in
     enable32Bit = true;
   };
 
+  # Xbox controllers: xone for wired and the wireless dongle, xpadneo over
+  # Bluetooth.
   hardware.xone.enable = true;
+  hardware.xpadneo.enable = true;
   hardware.keyboard.qmk.enable = true;
+
+  hardware.bluetooth = {
+    enable = true;
+    powerOnBoot = true;
+  };
 }
