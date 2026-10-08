@@ -16,10 +16,18 @@ in
     ];
   };
 
-  # Network printer discovery (mDNS / DNS-SD).
+  # Network printer and scanner discovery (mDNS / DNS-SD).
   services.avahi = {
     enable = true;
     nssmdns4 = true;
     openFirewall = true;
   };
+
+  # Scanning on the ET-2750 over the network, driverless via eSCL (airscan).
+  hardware.sane = {
+    enable = true;
+    extraBackends = [ pkgs.sane-airscan ];
+  };
+  # Skanpage is Plasma's scanning app.
+  environment.systemPackages = [ pkgs.kdePackages.skanpage ];
 }
