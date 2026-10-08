@@ -1,30 +1,30 @@
 #!/usr/bin/env bash
 #
-# Set up this machine to use the nixosconf flake.
+# Set up this machine to use the nixosconf flake. Run it from your normal
+# account with sudo:
 #
 #   curl -fsSL https://raw.githubusercontent.com/tahuffman1s/nixosconf/main/setup.sh | sudo bash
 #
-# Environment overrides:
-#   NIXOSCONF_BRANCH   branch to check out            (default: main)
-#   NIXOSCONF_DIR      where the config lives          (default: /etc/nixos)
-#   NIXOSCONF_REPO     git URL of the config repo
-#   DRY_RUN=1          print the privileged steps instead of running them
+# It uses the account that ran sudo, clones the repo into that account's home,
+# points /etc/nixos at the clone, writes user.nix, hardware-configuration.nix
+# and drives.nix for this machine, and switches to the new system.
 #
-# What it does:
-#   1. backs up the current config dir to <dir>.bak-<timestamp>
-#   2. clones (or updates) the repo into the config dir
-#   3. keeps this machine's hardware-configuration.nix, generating one if
-#      there is none
-#   4. runs `nixos-rebuild switch --flake <dir>#nixos`
-#   5. sets a password for the user if the account did not exist before
+# Environment overrides:
+#   NIXOSCONF_BRANCH            branch to check out        (default: main)
+#   NIXOSCONF_DIR               where to clone             (default: ~/nixosconf)
+#   NIXOSCONF_REPO              git URL of the config repo
+#   NIXOSCONF_USER              account to set up          (default: the sudo user)
+#   NIXOSCONF_REGEN_HARDWARE=1  rewrite hardware-configuration.nix and drives.nix
+#                               on an existing clone (always done on a fresh one)
+#   DRY_RUN=1                   print the state-changing steps instead of running them
 
 set -euo pipefail
 
 REPO="${NIXOSCONF_REPO:-https://github.com/tahuffman1s/nixosconf.git}"
 BRANCH="${NIXOSCONF_BRANCH:-main}"
-DIR="${NIXOSCONF_DIR:-/etc/nixos}"
-USER_NAME="travis"          # must match Config/users.nix and Home/settings.nix
-FLAKE_HOST="nixos"          # must match nixosConfigurations.<name> in flake.nix
+LINK="/etc/nixos"
+FLAKE_HOST="nixos"          # nixosConfigurations.<name> in flake.nix
+DRIVES="GD1 GD2"            # mounted at /mnt/<name>, written to drives.nix
 DRY_RUN="${DRY_RUN:-0}"
 
 export NIX_CONFIG="experimental-features = nix-command flakes"
@@ -33,7 +33,7 @@ say()  { printf '\033[1;32m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m==>\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31m==>\033[0m %s\n' "$*" >&2; exit 1; }
 
-# Privileged / state-changing steps go through here so DRY_RUN can show them.
+# State-changing steps go through here so DRY_RUN can show them.
 run() {
   if [ "$DRY_RUN" = 1 ]; then
     printf '   + %s\n' "$*"
@@ -42,103 +42,192 @@ run() {
   fi
 }
 
-# git is not installed on a fresh NixOS; borrow it from nixpkgs if needed.
-git_cmd() {
-  if command -v git >/dev/null 2>&1; then
-    git "$@"
-  else
-    nix shell nixpkgs#git -c git "$@"
-  fi
-}
-
 # ---------------------------------------------------------------------------
+# Who is this for?
 
 [ -e /etc/NIXOS ] || [ "$DRY_RUN" = 1 ] || die "This only works on NixOS."
 
 if [ "$(id -u)" -ne 0 ]; then
-  die "Run this as root, e.g.:
+  die "Run this with sudo from your own account:
   curl -fsSL https://raw.githubusercontent.com/tahuffman1s/nixosconf/${BRANCH}/setup.sh | sudo bash"
 fi
 
-user_existed=0
-id "$USER_NAME" >/dev/null 2>&1 && user_existed=1
+USER_NAME="${NIXOSCONF_USER:-${SUDO_USER:-}}"
+[ -n "$USER_NAME" ] || USER_NAME="$(logname 2>/dev/null || true)"
+[ -n "$USER_NAME" ] && [ "$USER_NAME" != root ] \
+  || die "Could not tell which account to set up. Run with sudo from your own account, or set NIXOSCONF_USER."
 
-# 1. Back up whatever is there now --------------------------------------------
-hw_backup=""
-if [ -d "$DIR" ] && [ ! -d "$DIR/.git" ]; then
-  backup="${DIR}.bak-$(date +%Y%m%d-%H%M%S)"
-  say "Backing up $DIR to $backup"
-  [ -f "$DIR/hardware-configuration.nix" ] && hw_backup="$backup/hardware-configuration.nix"
-  run mv "$DIR" "$backup"
-fi
+passwd_entry="$(getent passwd "$USER_NAME" || true)"
+[ -n "$passwd_entry" ] || die "No such user: $USER_NAME"
+HOME_DIR="$(printf '%s' "$passwd_entry" | cut -d: -f6)"
+FULL_NAME="$(printf '%s' "$passwd_entry" | cut -d: -f5 | cut -d, -f1)"
+[ -n "$FULL_NAME" ] || FULL_NAME="$USER_NAME"
+DIR="${NIXOSCONF_DIR:-$HOME_DIR/nixosconf}"
 
-# 2. Clone or update the repo ---------------------------------------------------
-if [ -d "$DIR/.git" ]; then
-  origin="$(git_cmd -C "$DIR" remote get-url origin 2>/dev/null || true)"
-  if [ "${origin%.git}" != "${REPO%.git}" ]; then
-    die "$DIR is a git checkout of '$origin', not '$REPO'. Move it aside and rerun."
+say "Setting up for user $USER_NAME ($FULL_NAME), config in $DIR"
+
+as_user() { run sudo -u "$USER_NAME" -H env NIX_CONFIG="$NIX_CONFIG" "$@"; }
+
+# Write a file into the checkout, owned by the user.
+write_as_user() { # path, content on stdin
+  if [ "$DRY_RUN" = 1 ]; then
+    printf '   + write %s:\n' "$1"; sed 's/^/     | /'
+  else
+    install -o "$USER_NAME" -g "$(id -gn "$USER_NAME")" -m 644 /dev/stdin "$1"
   fi
-  say "Updating existing checkout in $DIR (branch $BRANCH)"
-  run git_cmd -C "$DIR" fetch origin "$BRANCH"
-  run git_cmd -C "$DIR" checkout "$BRANCH"
-  run git_cmd -C "$DIR" pull --ff-only --autostash origin "$BRANCH"
+}
+
+# git is not installed on a fresh NixOS; borrow it from nixpkgs if needed.
+if command -v git >/dev/null 2>&1 || [ "$DRY_RUN" = 1 ]; then
+  GIT=git
 else
-  say "Cloning $REPO (branch $BRANCH) into $DIR"
-  run git_cmd clone --branch "$BRANCH" "$REPO" "$DIR"
+  say "git is not installed, fetching it from nixpkgs"
+  GIT="$(nix build --no-link --print-out-paths nixpkgs#git)/bin/git"
 fi
 
-# 3. Hardware configuration -----------------------------------------------------
-# The repo tracks the hardware-configuration.nix of the machine it was written
-# on. This machine's own copy always wins; generate one if there is none.
-if [ -n "$hw_backup" ]; then
-  say "Keeping this machine's hardware-configuration.nix from the backup"
-  run cp "$hw_backup" "$DIR/hardware-configuration.nix"
-elif [ ! -f "$DIR/hardware-configuration.nix" ] || [ "$DRY_RUN" = 1 ]; then
+# ---------------------------------------------------------------------------
+# 1. Clone or update the repo, as the user
+
+fresh=0
+if [ -d "$DIR/.git" ]; then
+  origin="$(sudo -u "$USER_NAME" "$GIT" -C "$DIR" remote get-url origin 2>/dev/null || true)"
+  [ "${origin%.git}" = "${REPO%.git}" ] \
+    || die "$DIR is a checkout of '$origin', not '$REPO'. Move it aside or set NIXOSCONF_DIR."
+  say "Updating existing checkout (branch $BRANCH)"
+  as_user "$GIT" -C "$DIR" fetch origin "$BRANCH"
+  as_user "$GIT" -C "$DIR" checkout "$BRANCH"
+  as_user "$GIT" -C "$DIR" pull --ff-only --autostash origin "$BRANCH"
+elif [ -e "$DIR" ]; then
+  die "$DIR exists but is not a git checkout. Move it aside or set NIXOSCONF_DIR."
+else
+  say "Cloning $REPO (branch $BRANCH)"
+  as_user "$GIT" clone --branch "$BRANCH" "$REPO" "$DIR"
+  fresh=1
+fi
+
+# ---------------------------------------------------------------------------
+# 2. user.nix: build the config for this account
+
+say "Writing user.nix for $USER_NAME"
+write_as_user "$DIR/user.nix" <<NIX
+# The account this configuration is built for. setup.sh rewrites this with
+# whatever account it is run from.
+{
+  name = "$USER_NAME";
+  fullName = "$FULL_NAME";
+}
+NIX
+
+# ---------------------------------------------------------------------------
+# 3. hardware-configuration.nix and drives.nix for this machine
+
+# Find the partition for /mnt/<label>. Tries, in order: whatever is mounted
+# there now, a filesystem labelled <label>, the UUID the repo already knows,
+# and finally asks. Prints "<uuid> <fstype>" or nothing.
+find_drive() {
+  local label="$1" dev="" uuid="" fstype=""
+  dev="$(findmnt -n -o SOURCE "/mnt/$label" 2>/dev/null || true)"
+  [ -n "$dev" ] || dev="$(blkid -L "$label" 2>/dev/null || true)"
+  if [ -z "$dev" ] && [ -f "$DIR/drives.nix" ]; then
+    uuid="$(grep -A1 "\"/mnt/$label\"" "$DIR/drives.nix" | grep -o 'by-uuid/[0-9A-Fa-f-]*' | cut -d/ -f2 || true)"
+    [ -n "$uuid" ] && dev="$(blkid -U "$uuid" 2>/dev/null || true)"
+  fi
+  if [ -z "$dev" ] && { : </dev/tty; } 2>/dev/null; then
+    {
+      echo
+      echo "Could not find the drive for /mnt/$label. Partitions on this machine:"
+      lsblk -o NAME,SIZE,FSTYPE,LABEL,UUID,MOUNTPOINT 2>/dev/null || true
+      echo
+    } >/dev/tty
+    read -r -p "Device for /mnt/$label (e.g. /dev/sdb1, blank to skip): " dev </dev/tty
+  fi
+  [ -n "$dev" ] || return 0
+  uuid="$(blkid -s UUID -o value "$dev" 2>/dev/null || true)"
+  fstype="$(blkid -s TYPE -o value "$dev" 2>/dev/null || true)"
+  if [ -z "$uuid" ] || [ -z "$fstype" ]; then
+    warn "Could not read a UUID and filesystem type from $dev, skipping /mnt/$label"
+    return 0
+  fi
+  printf '%s %s\n' "$uuid" "$fstype"
+}
+
+if [ "$fresh" = 1 ] || [ "${NIXOSCONF_REGEN_HARDWARE:-0}" = 1 ] || [ ! -f "$DIR/hardware-configuration.nix" ]; then
   say "Generating hardware-configuration.nix for this machine"
   if [ "$DRY_RUN" = 1 ]; then
     run "nixos-generate-config --show-hardware-config > $DIR/hardware-configuration.nix"
   else
-    nixos-generate-config --show-hardware-config > "$DIR/hardware-configuration.nix"
+    nixos-generate-config --show-hardware-config | write_as_user "$DIR/hardware-configuration.nix"
   fi
+
+  say "Looking for the data drives ($DRIVES)"
+  entries=""
+  for label in $DRIVES; do
+    found="$(find_drive "$label")"
+    if [ -z "$found" ]; then
+      warn "/mnt/$label not configured; rerun with NIXOSCONF_REGEN_HARDWARE=1 or edit drives.nix"
+      continue
+    fi
+    uuid="${found% *}"; fstype="${found#* }"
+    say "/mnt/$label -> UUID $uuid ($fstype)"
+    entries="$entries
+  fileSystems.\"/mnt/$label\" = {
+    device = \"/dev/disk/by-uuid/$uuid\";
+    fsType = \"$fstype\";
+    options = [ \"nofail\" ];
+  };"
+  done
+  write_as_user "$DIR/drives.nix" <<NIX
+# Extra data drives. setup.sh regenerates this file after finding the drives
+# on the machine, so edit it by hand only if the detection got it wrong.
+{ ... }:
+{$entries
+}
+NIX
 else
-  warn "Using the hardware-configuration.nix that ships in the repo."
-  warn "If this is not the machine it was generated on, run:"
-  warn "  sudo nixos-generate-config --show-hardware-config > $DIR/hardware-configuration.nix"
+  say "Keeping the existing hardware-configuration.nix and drives.nix (NIXOSCONF_REGEN_HARDWARE=1 to redo)"
 fi
 
-# 4. Make the checkout editable by the user ------------------------------------
-# The fish aliases open files in $DIR with codium as $USER_NAME.
-if [ "$user_existed" = 1 ]; then
-  say "Giving $USER_NAME ownership of $DIR"
-  run chown -R "$USER_NAME" "$DIR"
-fi
-run git_cmd config --global --add safe.directory "$DIR"
+# ---------------------------------------------------------------------------
+# 4. /etc/nixos -> the checkout
 
-# 5. Build and switch -----------------------------------------------------------
-say "Building and switching to the new system (first run downloads several GB)"
-run nixos-rebuild switch --flake "${DIR}#${FLAKE_HOST}"
-
-if [ "$user_existed" = 0 ]; then
-  say "Giving $USER_NAME ownership of $DIR"
-  run chown -R "$USER_NAME" "$DIR"
-  if [ "$DRY_RUN" = 1 ]; then
-    run "passwd $USER_NAME"
-  elif [ -r /dev/tty ]; then
-    say "User $USER_NAME was just created. Set a password for it:"
-    passwd "$USER_NAME" </dev/tty
+if [ "$DIR" != "$LINK" ]; then
+  if [ -L "$LINK" ] && [ "$(readlink -f "$LINK")" = "$(readlink -f "$DIR" 2>/dev/null || echo "$DIR")" ]; then
+    say "$LINK already points at $DIR"
   else
-    warn "User $USER_NAME was just created but has no password. Run: sudo passwd $USER_NAME"
+    if [ -e "$LINK" ] || [ -L "$LINK" ]; then
+      backup="${LINK}.bak-$(date +%Y%m%d-%H%M%S)"
+      say "Moving the current $LINK to $backup"
+      run mv "$LINK" "$backup"
+    fi
+    say "Linking $LINK -> $DIR"
+    run ln -s "$DIR" "$LINK"
   fi
 fi
+
+# nix refuses to read a git repo owned by someone else unless it is marked
+# safe, and root reads the user's checkout during nixos-rebuild. The system
+# config takes care of this once it is applied; for the first build root's own
+# gitconfig has to do it, so run the build with HOME=/root.
+# libgit2 matches safe.directory against the resolved path of the repo.
+real_dir="$(readlink -f "$DIR" 2>/dev/null || echo "$DIR")"
+if ! git config --file /root/.gitconfig --get-all safe.directory 2>/dev/null | grep -qx "$real_dir"; then
+  run git config --file /root/.gitconfig --add safe.directory "$real_dir"
+fi
+
+# ---------------------------------------------------------------------------
+# 5. Build and switch
+
+say "Building and switching to the new system (the first run downloads several GB)"
+run env HOME=/root nixos-rebuild switch --flake "${LINK}#${FLAKE_HOST}"
 
 say "Done."
 cat <<MSG
 
-  Config:   $DIR  (branch $BRANCH)
-  Rebuild:  sudo nixos-rebuild switch --flake $DIR#$FLAKE_HOST
-  Update:   cd $DIR && sudo nix flake update && sudo nixos-rebuild switch --flake .
+  Config:    $DIR  (branch $BRANCH), reachable as $LINK
+  Update:    topgrade          (refreshes flake inputs, rebuilds, updates flatpaks)
+  Rebuild:   sudo nixos-rebuild switch --flake $LINK
 
-  Flatpaks from Apps/flatpaks.nix are installed by a user service the first
-  time $USER_NAME logs in to the new system (it needs network access).
-  Home folders are only linked into /mnt/GD2/Backup when that drive is mounted.
+  Flatpaks from Apps/flatpaks.nix are installed by a user service the next
+  time $USER_NAME logs in (it needs network access). Home folders are only
+  linked into /mnt/GD2/Backup once that drive is mounted.
 MSG

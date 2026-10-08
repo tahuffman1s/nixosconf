@@ -1,8 +1,8 @@
-{ config, pkgs, ...}:
+{ config, pkgs, user, ...}:
 let 
 in 
 {
-  home.username = "travis";
-  home.homeDirectory = "/home/travis";
+  home.username = user.name;
+  home.homeDirectory = "/home/${user.name}";
   home.enableNixpkgsReleaseCheck = false;
 }

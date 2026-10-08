@@ -40,10 +40,14 @@
     };
   };
 
-  outputs = { self, nixpkgs, home-manager, nix-flatpak, plasma-manager, lsfg-vk-flake, ... }@inputs: {
+  outputs = { self, nixpkgs, home-manager, nix-flatpak, plasma-manager, lsfg-vk-flake, ... }@inputs:
+  let
+    # Which account the system and home config are for; see user.nix.
+    user = import ./user.nix;
+  in {
     nixosConfigurations.nixos = nixpkgs.lib.nixosSystem {
       system = "x86_64-linux";
-      specialArgs = { inherit inputs; };
+      specialArgs = { inherit inputs user; };
       modules = [
         ./configuration.nix
         lsfg-vk-flake.nixosModules.default
@@ -51,8 +55,8 @@
         {
           home-manager.useGlobalPkgs = true;
           home-manager.useUserPackages = true;
-          home-manager.extraSpecialArgs = { inherit inputs; };
-          home-manager.users.travis.imports = [
+          home-manager.extraSpecialArgs = { inherit inputs user; };
+          home-manager.users.${user.name}.imports = [
             ./Home/home.nix
             plasma-manager.homeModules.plasma-manager
             nix-flatpak.homeManagerModules.nix-flatpak

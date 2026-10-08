@@ -6,19 +6,20 @@ everywhere.
 
 ## Setup
 
-On a NixOS machine:
+On a NixOS machine, from your own account:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/tahuffman1s/nixosconf/main/setup.sh | sudo bash
 ```
 
-The script backs up `/etc/nixos`, clones this repo there, keeps the machine's
-own `hardware-configuration.nix` (or generates one), and runs
-`nixos-rebuild switch --flake /etc/nixos#nixos`. If the `travis` user did not
-exist yet it asks for a password at the end. Rerunning the script on a machine
-that already has the checkout just pulls and switches.
+The script builds the config for the account that ran `sudo`. It clones this
+repo into `~/nixosconf` (owned by you), points `/etc/nixos` at it, writes
+`user.nix` with your account name, generates `hardware-configuration.nix`, finds
+the GD1 and GD2 drives for `drives.nix` (by current mount, filesystem label,
+known UUID, or by asking), and runs `nixos-rebuild switch --flake /etc/nixos`.
+Rerunning it on a machine that already has the clone just pulls and switches.
 
-To try a branch other than `main`:
+To use a branch other than `main`:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/tahuffman1s/nixosconf/main/setup.sh | sudo NIXOSCONF_BRANCH=some-branch bash
@@ -27,17 +28,20 @@ curl -fsSL https://raw.githubusercontent.com/tahuffman1s/nixosconf/main/setup.sh
 ## Day to day
 
 ```sh
-sudo nixos-rebuild switch --flake /etc/nixos          # apply changes
-cd /etc/nixos && sudo nix flake update && sudo nixos-rebuild switch --flake .   # update inputs
+topgrade                                       # or `update` in fish
+sudo nixos-rebuild switch --flake /etc/nixos   # or `swap` in fish, after editing
 ```
 
-The fish shell has aliases for these (`swap`, `update`, `flake`, `conf`, `home`).
+topgrade is configured in `Apps/topgrade.nix`: it refreshes `flake.lock`,
+runs `nixos-rebuild switch --flake /etc/nixos`, then updates the Flatpaks.
 
 ## Layout
 
 | Path | What |
 | --- | --- |
 | `flake.nix` | Inputs and the `nixos` system definition |
+| `user.nix` | The account the config is built for (written by setup.sh) |
+| `drives.nix` | GD1 and GD2 mounts (written by setup.sh) |
 | `configuration.nix` | System module list |
 | `Config/` | Boot, hardware, networking, locale, services, users, nix settings |
 | `Apps/` | Per-app modules (Steam, kitty, fish, VSCodium, Flatpak list, ...) |

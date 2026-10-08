@@ -15,8 +15,8 @@ in
       alias genConf="sudo nixos-generate-config"
       alias ship="codium ~/.config/starship.toml"
       alias genHardware="sudo nixos-generate-config"
-      alias update="cd /etc/nixos; sudo nix flake update; sudo nixos-rebuild switch --flake ."
-      alias wipeass="journalctl -xe --unit home-manager-travis"
+      alias update="topgrade"
+      alias wipeass="journalctl -xe --unit home-manager-$USER"
     '';
   };
 }

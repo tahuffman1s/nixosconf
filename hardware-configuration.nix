@@ -18,20 +18,10 @@
       fsType = "ext4";
     };
 
-  fileSystems."/mnt/GD1" =
-    { device = "/dev/disk/by-uuid/f872ffaa-a901-4f8b-9135-10bb98cd6db8";
-      fsType = "ext4";
-    };
-
   fileSystems."/boot" =
     { device = "/dev/disk/by-uuid/350D-7875";
       fsType = "vfat";
       options = [ "fmask=0077" "dmask=0077" ];
-    };
-
-  fileSystems."/mnt/GD2" =
-    { device = "/dev/disk/by-uuid/f96fa08b-a212-466d-817c-1d15cf5a323f";
-      fsType = "btrfs";
     };
 
   swapDevices = [ ];

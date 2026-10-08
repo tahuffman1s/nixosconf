@@ -3,6 +3,7 @@
   imports =
     [ 
       ./hardware-configuration.nix
+      ./drives.nix
       ./Config/plymouth.nix
       ./Config/boot.nix
       ./Config/hardware.nix

@@ -31,8 +31,8 @@ in
       Context.filesystems = [
         "xdg-config/gtk-4.0"
         "xdg-config/gtk-3.0"
-        "/home/travis/.themes"
-        "/home/travis/.icons"
+        "${config.home.homeDirectory}/.themes"
+        "${config.home.homeDirectory}/.icons"
         # Game drive, and the backup drive that the home folders link into
         # (flatpak does not follow symlinks out of the sandbox otherwise).
         "/mnt/GD1"

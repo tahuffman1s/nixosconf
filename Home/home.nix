@@ -11,6 +11,7 @@ in
    ../Apps/kitty.nix
    ../Apps/fish.nix
    ../Apps/zoxide.nix
+   ../Apps/topgrade.nix
    ../Apps/flatpaks.nix
    ../Apps/vscodium.nix
    ../Apps/gimp.nix

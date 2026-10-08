@@ -1,10 +1,10 @@
-{ config, pkgs, ...}:
+{ config, pkgs, user, ...}:
 let 
 in 
 {
-  users.users.travis = {
+  users.users.${user.name} = {
     isNormalUser = true;
-    description = "Travis Huffman";
+    description = user.fullName;
     extraGroups = [ "networkmanager" "wheel" ];
     packages = with pkgs; [
       kdePackages.kate
