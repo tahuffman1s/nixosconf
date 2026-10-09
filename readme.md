@@ -60,10 +60,11 @@ Update) rebuilds:
 | System Units | `Config/units.json`, `Config/units/` | systemd units for the whole machine: drop `.service`/`.timer` files, or create a timer from a name, command and schedule |
 | User Units | same | The same for home-manager units that run as you inside your session |
 | Scripts | `Home/scripts.json`, `Home/scripts/` | Bash or Python scripts plus companion files; installed side by side in `~/.local/share/nixos-scripts/` (root scripts and their companions in `/etc/nixos-scripts/`) and run from there, so `$(dirname "$0")` finds a companion file next to the script; `~/.local/bin` wrappers put scripts on PATH; Run and Edit buttons; the timer wizard can pick one; scripts ticked "After update" run at the end of every Update or Apply, attended or not; "As root" runs a script with root rights, from the copy the system build installs under `/etc/nixos-scripts/` |
+| Default Apps | `Home/defaults.json` | Which app opens web links, mail, folders, text, images, video, music, PDFs, archives and torrents, plus the terminal; applied through `xdg.mimeApps` and kdeglobals; can import Plasma's current choices |
 | Auto Updates | `Config/autoupdate.json` | A systemd timer that refreshes inputs, rebuilds (for next boot or immediately), updates Flatpaks, and can reboot when the kernel changed |
 
-Terminal equivalents: `nixos-updater unit add|remove|list` and
-`nixos-updater script add|remove|run|list`.
+Terminal equivalents: `nixos-updater unit add|remove|list`,
+`nixos-updater script add|remove|run|list` and `nixos-updater defaults list|set|import`.
 
 ## Layout
 
@@ -76,7 +77,7 @@ Terminal equivalents: `nixos-updater unit add|remove|list` and
 | `Config/` | Boot, hardware, networking, locale, services, users, nix settings |
 | `Apps/` | Per-app modules (Steam, kitty, fish, VSCodium, Zen, the updater app, ...) |
 | `Apps/flatpaks.json` | Installed Flatpaks and their permissions, kept in sync by the updater |
-| `Home/autostart.json`, `Home/shortcuts.json`, `Home/scripts.json` + `Home/scripts/`, `Config/units.json` + `Config/units/`, `Config/autoupdate.json` | Edited by the updater's pages |
+| `Home/autostart.json`, `Home/shortcuts.json`, `Home/scripts.json` + `Home/scripts/`, `Home/defaults.json`, `Config/units.json` + `Config/units/`, `Config/autoupdate.json` | Edited by the updater's pages |
 | `Home/` | home-manager entry point, native packages, home folder links |
 | `Theme/` | Plasma and GTK theming |
 | `Files/` | Theme archives unpacked at build time |

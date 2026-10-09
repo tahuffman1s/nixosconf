@@ -14,6 +14,7 @@ GUI by default (Qt, follows the Plasma style). Subcommands for the terminal:
     nixos-updater unit add FILE [--user] [--disabled] | remove NAME | list
     nixos-updater script add FILE... [--data] [--post-update] [--root] | remove NAME | run NAME | list
     nixos-updater script post-update NAME on|off | root NAME on|off
+    nixos-updater defaults list | set CATEGORY DESKTOP-FILE | import
 """
 
 import argparse
@@ -42,6 +43,7 @@ FILES = {
     "units": CONFIG_DIR / "Config" / "units.json",
     "scripts": CONFIG_DIR / "Home" / "scripts.json",
     "autoupdate": CONFIG_DIR / "Config" / "autoupdate.json",
+    "defaults": CONFIG_DIR / "Home" / "defaults.json",
 }
 DEFAULTS = {
     "flatpaks": {"packages": [], "overrides": {}},
@@ -50,7 +52,24 @@ DEFAULTS = {
     "units": [],
     "scripts": [],
     "autoupdate": {"enabled": False, "schedule": "Sun 04:00", "mode": "boot", "reboot": False, "flatpaks": True},
+    "defaults": {},
 }
+# Default-application categories: label and the MIME types they stand for
+# (mirrors Home/defaults.nix). "terminal" is special: Plasma reads it from
+# kdeglobals, and candidates are apps in the TerminalEmulator category.
+DEFAULT_CATEGORIES = [
+    ("browser", "Web browser", ["text/html", "x-scheme-handler/http", "x-scheme-handler/https"]),
+    ("email", "Email client", ["x-scheme-handler/mailto"]),
+    ("files", "File manager", ["inode/directory"]),
+    ("terminal", "Terminal", []),
+    ("text", "Text editor", ["text/plain"]),
+    ("images", "Image viewer", ["image/png", "image/jpeg"]),
+    ("video", "Video player", ["video/mp4", "video/x-matroska"]),
+    ("music", "Music player", ["audio/mpeg", "audio/flac"]),
+    ("pdf", "PDF viewer", ["application/pdf"]),
+    ("archives", "Archive manager", ["application/zip"]),
+    ("torrent", "Torrents and magnet links", ["application/x-bittorrent", "x-scheme-handler/magnet"]),
+]
 UNITS_DIR = CONFIG_DIR / "Config" / "units"
 SCRIPTS_DIR = CONFIG_DIR / "Home" / "scripts"
 UNIT_SUFFIXES = (".service", ".timer", ".socket", ".path", ".target", ".mount", ".automount")
@@ -274,6 +293,8 @@ def parse_desktop(path):
         "name": entry.get("Name", os.path.basename(path)),
         "exec": FIELD_CODES.sub("", entry.get("Exec")).strip(),
         "icon": entry.get("Icon", ""),
+        "mime": [m for m in entry.get("MimeType", "").split(";") if m],
+        "categories": [c for c in entry.get("Categories", "").split(";") if c],
     }
 
 
@@ -327,6 +348,51 @@ def import_autostart(entries):
                 added.append(entry["name"])
     notes = ["Autostart entries added from Plasma settings: " + ", ".join(added)] if added else []
     return sorted(entries, key=lambda e: e["name"].lower()), notes
+
+
+def candidates_for(category, apps):
+    """Installed apps that can handle a default-application category."""
+    mimes = next(m for key, _, m in DEFAULT_CATEGORIES if key == category)
+    if category == "terminal":
+        return [a for a in apps if "TerminalEmulator" in a["categories"]]
+    return [a for a in apps if any(m in a["mime"] for m in mimes)]
+
+
+def import_defaults(apps):
+    """Current choices from ~/.config/mimeapps.list, as {category: desktop file}."""
+    path = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "mimeapps.list"
+    parser = configparser.ConfigParser(interpolation=None, delimiters=("=",), strict=False)
+    parser.optionxform = str
+    try:
+        parser.read(path, encoding="utf-8")
+    except (OSError, configparser.Error):
+        return {}
+    current = parser["Default Applications"] if "Default Applications" in parser else {}
+    found = {}
+    for key, _, mimes in DEFAULT_CATEGORIES:
+        for m in mimes:
+            value = current.get(m, "").split(";")[0].strip() if current else ""
+            if value:
+                found[key] = value
+                break
+    kdeglobals = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "kdeglobals"
+    parser = configparser.ConfigParser(interpolation=None, delimiters=("=",), strict=False)
+    parser.optionxform = str
+    try:
+        parser.read(kdeglobals, encoding="utf-8")
+        term = parser["General"].get("TerminalService", "") if "General" in parser else ""
+        if term:
+            found["terminal"] = term
+    except (OSError, configparser.Error):
+        pass
+    return found
+
+
+def exec_of(desktop_file, apps):
+    for a in apps:
+        if a["file"] == desktop_file:
+            return a["exec"].split()[0] if a["exec"] else ""
+    return os.path.splitext(desktop_file)[0]
 
 
 # ---------------------------------------------------------------------------
@@ -764,6 +830,29 @@ def cli(args):
         return 1
     if args.command == "reboot":
         os.execvp("systemctl", ["systemctl", "reboot"])
+    if args.command == "defaults":
+        data = load_json("defaults")
+        apps = available_apps()
+        if args.defaults_command == "list":
+            for key, label, _ in DEFAULT_CATEGORIES:
+                print(f'{label:26} {data.get(key, "") or "(not set)"}')
+            return 0
+        if args.defaults_command == "set":
+            keys = [k for k, _, _ in DEFAULT_CATEGORIES]
+            if args.category not in keys:
+                print("category must be one of: " + ", ".join(keys), file=sys.stderr)
+                return 1
+            data[args.category] = args.desktop_file
+            if args.category == "terminal":
+                data["terminalExec"] = exec_of(args.desktop_file, apps)
+        if args.defaults_command == "import":
+            found = import_defaults(apps)
+            data.update(found)
+            if "terminal" in found:
+                data["terminalExec"] = exec_of(found["terminal"], apps)
+            print("Imported: " + (", ".join(f"{k}={v}" for k, v in found.items()) or "nothing"))
+        save_and_commit("defaults", data, "Default applications: update", echo)
+        return 0
     if args.command == "unit":
         if args.unit_command == "list":
             for u in load_json("units"):
@@ -1454,6 +1543,51 @@ def gui(smoke_test=False):
             commit_scripts(self.log)
             self.window.needs_apply()
 
+    class DefaultsPage(Page):
+        title = "Default Apps"
+        subtitle = ("Which application opens what. Saved to the config and applied through mimeapps.list "
+                    "(and kdeglobals for the terminal) on the next Apply; Plasma's own Default Applications "
+                    "settings are overwritten by it. Only apps that declare support for a category are listed.")
+
+        def body(self):
+            self.data = load_json("defaults")
+            self.apps = available_apps()
+            self.combos = {}
+            form = QFormLayout()
+            form.setHorizontalSpacing(16)
+            for key, label, _ in DEFAULT_CATEGORIES:
+                combo = QComboBox()
+                combo.addItem("(not set)", "")
+                current = self.data.get(key, "")
+                for app in candidates_for(key, self.apps):
+                    combo.addItem(icon(app["icon"], "application-x-executable"), app["name"], app["file"])
+                if current and combo.findData(current) < 0:
+                    combo.addItem(icon("application-x-executable"), f"{current} (not installed)", current)
+                combo.setCurrentIndex(max(combo.findData(current), 0))
+                self.combos[key] = combo
+                form.addRow(label, combo)
+            self.layout_.addLayout(form)
+            self.layout_.addStretch(1)
+            self.actions(button("Import current choices", ["document-import", "view-refresh"], self.import_current),
+                         save=self.save)
+
+        def import_current(self):
+            found = import_defaults(self.apps)
+            for key, value in found.items():
+                combo = self.combos[key]
+                if combo.findData(value) < 0:
+                    combo.addItem(icon("application-x-executable"), value, value)
+                combo.setCurrentIndex(combo.findData(value))
+            self.log("Imported from mimeapps.list: " + (", ".join(f"{k}={v}" for k, v in found.items()) or "nothing"))
+
+        def save(self):
+            self.data = {key: combo.currentData() for key, combo in self.combos.items() if combo.currentData()}
+            if self.data.get("terminal"):
+                self.data["terminalExec"] = exec_of(self.data["terminal"], self.apps)
+            self.log("\n==> Saving default applications")
+            if save_and_commit("defaults", self.data, "Default applications: update", self.log):
+                self.window.needs_apply()
+
     class AutoUpdatePage(Page):
         title = "Auto Updates"
         subtitle = ("Unattended updates run by a systemd timer: refresh flake inputs, rebuild, update Flatpaks. "
@@ -1567,6 +1701,7 @@ def gui(smoke_test=False):
                 (SystemUnitsPage, ["preferences-system-services", "system-run"]),
                 (UserUnitsPage, ["user-identity", "system-users"]),
                 (ScriptsPage, ["text-x-script", "utilities-terminal"]),
+                (DefaultsPage, ["preferences-desktop-default-applications", "preferences-desktop"]),
                 (AutoUpdatePage, ["chronometer", "appointment-new"]),
             ]:
                 page = cls(self)
@@ -1832,6 +1967,12 @@ def main():
     script.add_parser("remove", help="remove a script or file from the config").add_argument("name")
     script.add_parser("run", help="run a script from the config").add_argument("name")
     script.add_parser("list", help="list scripts and files")
+    defaults = sub.add_parser("defaults", help="default applications").add_subparsers(dest="defaults_command")
+    defaults.add_parser("list", help="show the configured defaults")
+    ds = defaults.add_parser("set", help="set the default app for a category")
+    ds.add_argument("category")
+    ds.add_argument("desktop_file")
+    defaults.add_parser("import", help="read the current choices from mimeapps.list into the config")
     args = parser.parse_args()
     if args.command in (None, "gui"):
         return gui(smoke_test=getattr(args, "smoke_test", False))

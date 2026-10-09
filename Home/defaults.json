@@ -1,0 +1,10 @@
+{
+  "browser": "app.zen_browser.zen.desktop",
+  "files": "org.kde.dolphin.desktop",
+  "music": "org.fooyin.fooyin.desktop",
+  "terminal": "kitty.desktop",
+  "terminalExec": "kitty",
+  "text": "org.kde.kate.desktop",
+  "torrent": "org.qbittorrent.qBittorrent.desktop",
+  "video": "org.videolan.VLC.desktop"
+}

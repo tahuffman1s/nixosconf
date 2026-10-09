@@ -9,6 +9,7 @@ in
    ./autostart.nix
    ./units.nix
    ./scripts.nix
+   ./defaults.nix
    ../Apps/git.nix
    ../Apps/starship.nix
    ../Apps/kitty.nix
