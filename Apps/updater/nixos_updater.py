@@ -553,7 +553,71 @@ def flush_steps():
 
 
 def push_steps():
-    return [("Pushing the config repo", ["git", "push"])]
+    # accept-new: a first SSH push does not stall on the host-key prompt; the
+    # config also pins GitHub's key through programs.ssh.knownHosts.
+    return [("Pushing the config repo",
+             ["env", "GIT_SSH_COMMAND=ssh -o StrictHostKeyChecking=accept-new", "git", "push"])]
+
+
+# ---------------------------------------------------------------------------
+# Git remote and SSH key
+
+
+def remote_url():
+    """The configured origin URL (not what url.*.insteadOf would rewrite it to)."""
+    return run_capture(["git", "config", "--get", "remote.origin.url"], cwd=CONFIG_DIR).strip()
+
+
+def parse_remote(url):
+    """(host, owner, repo) from an https or ssh GitHub-style URL."""
+    m = re.search(r"([\w.-]+)[:/]([^/:]+)/([^/]+?)(?:\.git)?/?$", url)
+    if not m:
+        return ("github.com", "", "nixosconf")
+    return m.group(1), m.group(2), m.group(3)
+
+
+def ssh_remote(username, url):
+    host, _, repo = parse_remote(url)
+    if host not in url:
+        host = "github.com"
+    return f"git@{host}:{username}/{repo}.git"
+
+
+def set_remote(url):
+    subprocess.run(["git", "remote", "set-url", "origin", url], cwd=CONFIG_DIR, check=False)
+
+
+def ssh_public_key():
+    """Text of the first usable public key in ~/.ssh, or None."""
+    ssh_dir = Path.home() / ".ssh"
+    for name in ("id_ed25519", "id_ecdsa", "id_rsa"):
+        if (ssh_dir / name).exists() and (ssh_dir / f"{name}.pub").exists():
+            try:
+                return (ssh_dir / f"{name}.pub").read_text().strip()
+            except OSError:
+                continue
+    return None
+
+
+def generate_ssh_key():
+    ssh_dir = Path.home() / ".ssh"
+    ssh_dir.mkdir(mode=0o700, exist_ok=True)
+    comment = f"{os.environ.get('USER', 'user')}@{os.uname().nodename}"
+    try:
+        r = subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", comment, "-f", str(ssh_dir / "id_ed25519")],
+                           capture_output=True, text=True, check=False)
+    except FileNotFoundError:
+        raise RuntimeError("ssh-keygen is not installed") from None
+    if r.returncode != 0:
+        raise RuntimeError(r.stderr.strip() or "ssh-keygen failed")
+    return ssh_public_key()
+
+
+def remote_summary():
+    url = remote_url()
+    if not url:
+        return "none"
+    return f"{url}  (SSH)" if url.startswith("git@") or url.startswith("ssh://") else f"{url}  (HTTPS, Push switches it to SSH)"
 
 
 def reboot_required():
@@ -610,7 +674,33 @@ def cli(args):
     if args.command == "flush":
         return run_steps_cli(flush_steps())
     if args.command == "push":
-        return run_steps_cli(push_steps())
+        url = remote_url()
+        if not url:
+            print("No git remote configured.", file=sys.stderr)
+            return 1
+        try:
+            if url.startswith("https://"):
+                _, owner, _ = parse_remote(url)
+                prompt = f"Pushing uses SSH. GitHub username [{owner}]: " if owner else "GitHub username: "
+                name = input(prompt).strip() or owner
+                if not name:
+                    return 1
+                set_remote(ssh_remote(name, url))
+                print(f"Remote switched to {remote_url()}")
+            if ssh_public_key() is not None:
+                return run_steps_cli(push_steps())
+            create = input("No SSH key in ~/.ssh. Create one now? [Y/n] ").strip().lower()
+        except EOFError:
+            print()
+            return 1
+        if create in ("", "y", "yes"):
+            try:
+                pub = generate_ssh_key()
+            except RuntimeError as e:
+                print(f"Could not create a key: {e}", file=sys.stderr)
+                return 1
+            print("\nAdd this key at https://github.com/settings/keys, then push again:\n\n" + pub + "\n")
+        return 1
     if args.command == "reboot":
         os.execvp("systemctl", ["systemctl", "reboot"])
     if args.command == "unit":
@@ -919,6 +1009,7 @@ def gui(smoke_test=False):
                 ("Config", str(CONFIG_DIR)),
                 ("Flatpaks declared", str(len(load_json("flatpaks").get("packages", [])))),
                 ("Unpushed commits", str(unpushed_commits())),
+                ("Remote", remote_summary()),
             ]
             for r, (k, v) in enumerate(rows):
                 grid.addWidget(muted(k), r, 0)
@@ -969,6 +1060,7 @@ def gui(smoke_test=False):
             self.facts["Generation"].setText(gen)
             self.facts["Flatpaks declared"].setText(str(len(load_json("flatpaks").get("packages", []))))
             self.facts["Unpushed commits"].setText(str(unpushed_commits()))
+            self.facts["Remote"].setText(remote_summary())
 
     class FlatpaksPage(Page):
         title = "Flatpaks"
@@ -1535,7 +1627,56 @@ def gui(smoke_test=False):
             self.run([("Syncing Flatpaks and autostart entries", lambda log: step_sync(log))], "Sync finished.")
 
         def push(self):
+            from PyQt6.QtWidgets import QInputDialog
+            url = remote_url()
+            if not url:
+                self.log("No git remote configured.")
+                return
+            if url.startswith("https://"):
+                _, owner, _ = parse_remote(url)
+                name, ok = QInputDialog.getText(self, "Push over SSH",
+                                                "Pushing uses SSH with the key in ~/.ssh.\nGitHub username:", text=owner)
+                if not ok or not name.strip():
+                    return
+                set_remote(ssh_remote(name.strip(), url))
+                self.log(f"Remote switched to {remote_url()}")
+                self.refresh_pages()
+            if ssh_public_key() is None:
+                if QMessageBox.question(self, "SSH key", "No SSH key found in ~/.ssh. Create one now?") != QMessageBox.StandardButton.Yes:
+                    return
+                try:
+                    pub = generate_ssh_key()
+                except RuntimeError as e:
+                    QMessageBox.warning(self, "SSH key", str(e))
+                    return
+                self.show_public_key(pub)
+                return
             self.run(push_steps(), "Push finished.")
+
+        def show_public_key(self, pub):
+            d = QDialog(self)
+            d.setWindowTitle("Add your SSH key to GitHub")
+            layout = QVBoxLayout(d)
+            layout.addWidget(QLabel("A new key was created in ~/.ssh. Add it at github.com → Settings → SSH and GPG keys, "
+                                    "then press Push again."))
+            text = QPlainTextEdit(pub)
+            text.setReadOnly(True)
+            text.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
+            layout.addWidget(text)
+            row = QHBoxLayout()
+            copy = QPushButton(icon("edit-copy"), "Copy key")
+            copy.clicked.connect(lambda: QApplication.clipboard().setText(pub))
+            open_gh = QPushButton(icon("internet-services"), "Open GitHub settings")
+            open_gh.clicked.connect(lambda: QDesktopServices.openUrl(QUrl("https://github.com/settings/keys")))
+            row.addWidget(copy)
+            row.addWidget(open_gh)
+            row.addStretch(1)
+            close = QPushButton("Close")
+            close.clicked.connect(d.accept)
+            row.addWidget(close)
+            layout.addLayout(row)
+            d.resize(640, 220)
+            d.exec()
 
         def flush(self):
             if QMessageBox.question(self, "Flush", "Remove all old system and home-manager generations, "
