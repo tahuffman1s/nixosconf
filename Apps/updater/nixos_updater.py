@@ -55,7 +55,6 @@ UNITS_DIR = CONFIG_DIR / "Config" / "units"
 SCRIPTS_DIR = CONFIG_DIR / "Home" / "scripts"
 UNIT_SUFFIXES = (".service", ".timer", ".socket", ".path", ".target", ".mount", ".automount")
 SCRIPT_SUFFIXES = (".sh", ".bash", ".py")
-POST_UPDATE_RUNNER = Path.home() / ".local" / "share" / "nixos-scripts" / "post-update"
 
 # Keys under [Context] in a flatpak override file hold ';'-separated lists.
 LIST_KEYS = {"shared", "sockets", "devices", "features", "filesystems", "persistent"}
@@ -110,6 +109,16 @@ def git_commit(paths, message):
     if r.returncode != 0:
         return "commit failed: " + (r.stderr.strip() or r.stdout.strip())
     return f"committed: {message}"
+
+
+def git_stage(paths):
+    """`git add` files so the flake (which only sees tracked files) picks them up
+    on the next rebuild, even before they are committed with Save."""
+    git = shutil.which("git")
+    if git:
+        rel = [str(Path(p).relative_to(CONFIG_DIR)) for p in paths if Path(p).exists()]
+        if rel:
+            subprocess.run([git, "add", "--"] + rel, cwd=CONFIG_DIR, check=False)
 
 
 def save_and_commit(name, data, message, log, extra_paths=()):
@@ -350,6 +359,7 @@ def add_unit(path, scope, enabled=True):
     units = [u for u in load_json("units") if u["file"] != path.name] + [entry]
     units.sort(key=lambda u: u["file"])
     save_json("units", units)
+    git_stage([UNITS_DIR / path.name, FILES["units"]])
     return entry
 
 
@@ -436,6 +446,7 @@ def add_script(path, data=False, post_update=False):
     scripts = [s for s in load_json("scripts") if s["file"] != path.name] + [entry]
     scripts.sort(key=lambda s: s["file"])
     save_json("scripts", scripts)
+    git_stage([dest, FILES["scripts"]])
     return entry
 
 
@@ -465,9 +476,24 @@ def set_post_update(name, enabled):
 
 
 def post_update_step():
-    """Run the post-update runner the config installed, if there is one."""
-    return ("Running post-update scripts",
-            ["bash", "-c", f'r="{POST_UPDATE_RUNNER}"; if [ -x "$r" ]; then exec "$r"; else echo "No post-update scripts configured."; fi'])
+    """Run every script flagged "After update", in name order. Uses the copy
+    the config installed in ~/.local/bin when it is there, otherwise the copy
+    in the repo, so this works before the first Apply too."""
+    flagged = [s for s in load_json("scripts") if s["script"] and s.get("postUpdate")]
+    if not flagged:
+        return ("Running post-update scripts",
+                lambda log: log("No scripts are ticked \"After update\" on the Scripts page."))
+    parts = ["status=0"]
+    for entry in flagged:
+        installed = Path.home() / ".local" / "bin" / entry["file"]
+        fallback = " ".join(f"'{a}'" for a in script_run_cmd(entry))
+        parts.append(
+            f'echo "==> {entry["file"]}"; '
+            f'if [ -x "{installed}" ]; then "{installed}"; else echo "   (not installed yet, running the repo copy)"; {fallback}; fi '
+            f'|| {{ echo "==> {entry["file"]} failed with exit code $?"; status=1; }}'
+        )
+    parts.append("exit $status")
+    return ("Running post-update scripts", ["bash", "-c", "\n".join(parts)])
 
 
 def commit_scripts(log):
@@ -541,7 +567,7 @@ def update_steps(sync=True):
 
 
 def apply_steps():
-    return [("Building and switching to the new system", root_cmd("switch"))]
+    return [("Building and switching to the new system", root_cmd("switch")), post_update_step()]
 
 
 def flush_steps():
@@ -1290,6 +1316,7 @@ def gui(smoke_test=False):
             self.actions(button("Add script…", ["list-add"], lambda: self.add_dialog(False)),
                          button("Add companion file…", ["document-new"], lambda: self.add_dialog(True)),
                          button("Run", ["media-playback-start"], self.run),
+                         button("Run post-update scripts now", ["media-playlist-play", "media-playback-start"], self.run_post_update),
                          button("Edit", ["document-edit"], self.edit),
                          button("Remove", ["list-remove"], self.remove), save=self.save)
             self.refresh()
@@ -1348,6 +1375,9 @@ def gui(smoke_test=False):
                 QMessageBox.information(self, "Run", f'{s["file"]} is a companion file, not a script.')
                 return
             self.window.run([(f'Running {s["file"]}', script_run_cmd(s))], f'{s["file"]} finished.')
+
+        def run_post_update(self):
+            self.window.run([post_update_step()], "Post-update scripts finished.")
 
         def edit(self):
             s = self.selected()
