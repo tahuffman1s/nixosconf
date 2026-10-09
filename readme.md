@@ -56,6 +56,7 @@ and the home folder links.
 | CPU `amd` / `intel` | The matching microcode updates |
 | `dataDrives` | `false` writes an empty `drives.nix` and disables the mounts; nothing under `/mnt` is touched |
 | `homeLinks` | `false` leaves Documents, Downloads, Music, Pictures, Videos, `.ssh` and the book libraries as ordinary folders; `true` needs the GD2 drive |
+| `firmwarePowerProfile` | Laptops only. `false` stops power-profiles-daemon from following the firmware's own thermal profile, for laptops whose firmware keeps resetting it to balanced; the CPU preference still follows the chosen profile |
 | Laptop | power-profiles-daemon (Plasma's battery widget), thermald on Intel, Wi-Fi power saving, lid closes to suspend, power key suspends (long press powers off), rotation sensors, brightnessctl and powertop, zram swappiness back to 60, NVIDIA runtime power management when the GPU is NVIDIA |
 
 To change it later, edit `hardware.json` and run Apply in the updater, or

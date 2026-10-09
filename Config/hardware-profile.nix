@@ -7,12 +7,16 @@ let
   #   busIds: { igpu = "PCI:0:2:0"; nvidia = "PCI:1:0:0"; }   (hybrid)
   #   cpu:    "amd" | "intel"
   #   laptop: true | false
+  #   firmwarePowerProfile: true | false   laptop: let the firmware's thermal
+  #           profile (ACPI platform_profile) drive the power profile. Some
+  #           laptops reset it to balanced on their own; false tells
+  #           power-profiles-daemon to ignore it and only drive the CPU.
   #   dataDrives: true | false   mount GD1/GD2 (drives.nix)
   #   homeLinks:  true | false   link the home folders into /mnt/GD2/Backup (Home/links.nix)
   hw = {
     cpu = "amd"; gpu = "amd"; igpu = "intel"; prime = "offload";
     busIds = { igpu = ""; nvidia = ""; }; laptop = false;
-    dataDrives = true; homeLinks = true;
+    dataDrives = true; homeLinks = true; firmwarePowerProfile = true;
   } // builtins.fromJSON (builtins.readFile ../hardware.json);
   isAmdGpu = hw.gpu == "amd";
   isHybrid = hw.gpu == "hybrid";
@@ -123,6 +127,15 @@ in
   # power-profiles-daemon), thermald for Intel, Wi-Fi power saving, lid and
   # power-key handling, rotation sensors.
   services.power-profiles-daemon.enable = hw.laptop;
+  # The daemon follows every change the firmware makes to its platform
+  # profile, so a laptop whose firmware flips back to balanced on AC events
+  # or thermals drags the chosen profile with it. Blocking the platform
+  # driver leaves the firmware alone and keeps the CPU preference in charge.
+  systemd.services.power-profiles-daemon.serviceConfig.ExecStart =
+    lib.mkIf (hw.laptop && !hw.firmwarePowerProfile) [
+      ""
+      "${config.services.power-profiles-daemon.package}/libexec/power-profiles-daemon --block-driver=platform_profile"
+    ];
   services.thermald.enable = hw.laptop && hw.cpu == "intel";
   services.upower.enable = lib.mkIf hw.laptop true;
   hardware.sensor.iio.enable = hw.laptop;
