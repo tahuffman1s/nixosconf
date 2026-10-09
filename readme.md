@@ -56,6 +56,8 @@ and the home folder links.
 | CPU `amd` / `intel` | The matching microcode updates |
 | `dataDrives` | `false` writes an empty `drives.nix` and disables the mounts; nothing under `/mnt` is touched |
 | `homeLinks` | `false` leaves Documents, Downloads, Music, Pictures, Videos, `.ssh` and the book libraries as ordinary folders; `true` needs the GD2 drive |
+| `cpuPowerLimitWatts` | A number caps the CPU's sustained package power (Intel RAPL) at boot and after resume, for laptops whose cooler cannot keep up: 30 holds a 45 W i7 in the 80s while gaming and usually smooths the frame rate, because the chip stops thermal-cycling. Turns thermald off, since it would raise the limit again. `null` (default) leaves the firmware's limit |
+| `cpuTurbo` | `false` holds the CPU at its base clock (no boost); a coarser version of the power cap |
 | `firmwarePowerProfile` | Laptops only. `false` stops power-profiles-daemon from following the firmware's own thermal profile, for laptops whose firmware keeps resetting it to balanced; the CPU preference still follows the chosen profile |
 | Laptop | power-profiles-daemon (Plasma's battery widget), thermald on Intel, Wi-Fi power saving, lid closes to suspend, power key suspends (long press powers off), rotation sensors, brightnessctl and powertop, zram swappiness back to 60, NVIDIA runtime power management when the GPU is NVIDIA |
 

@@ -11,13 +11,20 @@ let
   #           profile (ACPI platform_profile) drive the power profile. Some
   #           laptops reset it to balanced on their own; false tells
   #           power-profiles-daemon to ignore it and only drive the CPU.
+  #   cpuPowerLimitWatts: null | number   cap the CPU's sustained package
+  #           power (Intel RAPL PL1). For laptops whose cooler cannot keep up:
+  #           30 holds a 45 W i7 in the 80s while gaming. Replaces thermald.
+  #   cpuTurbo: true | false   false keeps the CPU at its base clock (no boost)
   #   dataDrives: true | false   mount GD1/GD2 (drives.nix)
   #   homeLinks:  true | false   link the home folders into /mnt/GD2/Backup (Home/links.nix)
   hw = {
     cpu = "amd"; gpu = "amd"; igpu = "intel"; prime = "offload";
     busIds = { igpu = ""; nvidia = ""; }; laptop = false;
     dataDrives = true; homeLinks = true; firmwarePowerProfile = true;
+    cpuPowerLimitWatts = null; cpuTurbo = true;
   } // builtins.fromJSON (builtins.readFile ../hardware.json);
+  powerCap = hw.cpuPowerLimitWatts;
+  tuneCpu = powerCap != null || !hw.cpuTurbo;
   isAmdGpu = hw.gpu == "amd";
   isHybrid = hw.gpu == "hybrid";
   isNvidia = hw.gpu == "nvidia" || isHybrid;
@@ -42,6 +49,8 @@ in
       message = "hardware.json: igpu must be intel or amd (got ${toString hw.igpu})"; }
     { assertion = isHybrid -> builtins.elem hw.prime [ "offload" "sync" ];
       message = "hardware.json: prime must be offload or sync (got ${toString hw.prime})"; }
+    { assertion = powerCap == null || (builtins.isInt powerCap && powerCap >= 5 && powerCap <= 500);
+      message = "hardware.json: cpuPowerLimitWatts must be null or a whole number of watts (got ${toString powerCap})"; }
     { assertion = isHybrid -> (hw.busIds.igpu != "" && hw.busIds.nvidia != "");
       message = "hardware.json: a hybrid GPU needs busIds.igpu and busIds.nvidia (PCI:bus:device:function, from lspci). Rerun setup.sh or fill them in."; }
   ];
@@ -136,7 +145,40 @@ in
       ""
       "${config.services.power-profiles-daemon.package}/libexec/power-profiles-daemon --block-driver=platform_profile"
     ];
-  services.thermald.enable = hw.laptop && hw.cpu == "intel";
+  # thermald raises the power limit back to the maximum whenever the chip is
+  # cool, so it is off when a fixed cap is configured.
+  services.thermald.enable = hw.laptop && hw.cpu == "intel" && powerCap == null;
+
+  # ---------------------------------------------------------------------
+  # CPU power cap and turbo, applied at boot and after resume (firmware
+  # restores its own limits on wake). Package-level RAPL zones only, both
+  # the MSR and MMIO interfaces, since the higher of the two wins.
+  systemd.services.cpu-power-limits = lib.mkIf tuneCpu {
+    description = "CPU power limit and turbo settings from hardware.json";
+    wantedBy = [ "multi-user.target" ];
+    after = [ "systemd-modules-load.service" ];
+    serviceConfig = { Type = "oneshot"; RemainAfterExit = true; };
+    script = ''
+      ${lib.optionalString (powerCap != null) ''
+        for d in /sys/class/powercap/intel-rapl*:[0-9]*; do
+          case "$d" in *:*:*) continue ;; esac
+          [ -w "$d/constraint_0_power_limit_uw" ] || continue
+          echo ${toString (powerCap * 1000000)} > "$d/constraint_0_power_limit_uw"
+          # Short bursts (PL2) may go a little higher than the sustained cap.
+          [ -w "$d/constraint_1_power_limit_uw" ] &&             echo ${toString ((powerCap + 10) * 1000000)} > "$d/constraint_1_power_limit_uw" || true
+          echo "cpu-power-limits: $d sustained ${toString powerCap} W"
+        done
+      ''}
+      ${lib.optionalString (!hw.cpuTurbo) ''
+        [ -w /sys/devices/system/cpu/intel_pstate/no_turbo ] && echo 1 > /sys/devices/system/cpu/intel_pstate/no_turbo || true
+        [ -w /sys/devices/system/cpu/cpufreq/boost ] && echo 0 > /sys/devices/system/cpu/cpufreq/boost || true
+        echo "cpu-power-limits: turbo off"
+      ''}
+    '';
+  };
+  powerManagement.resumeCommands = lib.mkIf tuneCpu ''
+    ${pkgs.systemd}/bin/systemctl restart cpu-power-limits.service || true
+  '';
   services.upower.enable = lib.mkIf hw.laptop true;
   hardware.sensor.iio.enable = hw.laptop;
   networking.networkmanager.wifi.powersave = lib.mkIf hw.laptop true;
