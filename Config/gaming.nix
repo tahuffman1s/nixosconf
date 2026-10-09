@@ -23,6 +23,15 @@ in
   # GPU driver bits (amdgpu/LACT, NVIDIA, Intel) live in
   # Config/hardware-profile.nix, driven by hardware.json.
 
+  # Wine's NT synchronization primitives: Proton and Wine 10+ use
+  # /dev/ntsync for much faster thread sync in Windows games. The kernel
+  # ships it as a module that nothing autoloads, so load it at boot and
+  # let users open the device.
+  boot.kernelModules = [ "ntsync" ];
+  services.udev.extraRules = ''
+    KERNEL=="ntsync", MODE="0644"
+  '';
+
   # Full kernel preemption: lower latency for a little throughput.
   boot.kernelParams = [ "preempt=full" ];
 
