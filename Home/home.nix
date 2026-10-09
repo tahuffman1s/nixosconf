@@ -7,6 +7,7 @@ in
    ./settings.nix
    ./links.nix
    ./autostart.nix
+   ./units.nix
    ../Apps/git.nix
    ../Apps/starship.nix
    ../Apps/kitty.nix

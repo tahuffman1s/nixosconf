@@ -54,7 +54,7 @@ Save commits; Apply (or Update) rebuilds:
 | --- | --- | --- |
 | Autostart | `Home/autostart.json` | Apps and commands started with the Plasma session |
 | Shortcuts | `Home/shortcuts.json` | Global shortcuts that run a command (plasma-manager hotkeys) |
-| Services | `Config/services.json` | On/off switches for SSH, KDE Connect, Tailscale, Syncthing, Docker, libvirt, Sunshine, Jellyfin, fwupd; the NixOS side of each lives in `Config/services-toggles.nix` |
+| Services | `Config/units.json`, `Config/units/` | systemd units you drop in (.service, .timer, ...): the file is copied into the repo and installed as a system or user unit, enabled or not |
 | Auto Updates | `Config/autoupdate.json` | A systemd timer that refreshes inputs, rebuilds (for next boot or immediately), updates Flatpaks, and can reboot when the kernel changed |
 
 ## Layout
@@ -68,7 +68,7 @@ Save commits; Apply (or Update) rebuilds:
 | `Config/` | Boot, hardware, networking, locale, services, users, nix settings |
 | `Apps/` | Per-app modules (Steam, kitty, fish, VSCodium, Zen, the updater app, ...) |
 | `Apps/flatpaks.json` | Installed Flatpaks and their permissions, kept in sync by the updater |
-| `Home/autostart.json`, `Home/shortcuts.json`, `Config/services.json`, `Config/autoupdate.json` | Edited by the updater's tabs |
+| `Home/autostart.json`, `Home/shortcuts.json`, `Config/units.json` + `Config/units/`, `Config/autoupdate.json` | Edited by the updater's tabs |
 | `Home/` | home-manager entry point, native packages, home folder links |
 | `Theme/` | Plasma and GTK theming |
 | `Files/` | Theme archives unpacked at build time |

@@ -11,6 +11,8 @@ GUI by default (Qt, follows the Plasma style). Subcommands for the terminal:
     nixos-updater flush                remove old generations and unused flatpaks
     nixos-updater push                 git push the config repo
     nixos-updater reboot
+    nixos-updater unit add FILE [--user] [--disabled]
+    nixos-updater unit remove NAME | list
 """
 
 import argparse
@@ -34,16 +36,19 @@ FILES = {
     "flatpaks": CONFIG_DIR / "Apps" / "flatpaks.json",
     "autostart": CONFIG_DIR / "Home" / "autostart.json",
     "shortcuts": CONFIG_DIR / "Home" / "shortcuts.json",
-    "services": CONFIG_DIR / "Config" / "services.json",
+    "units": CONFIG_DIR / "Config" / "units.json",
     "autoupdate": CONFIG_DIR / "Config" / "autoupdate.json",
 }
 DEFAULTS = {
     "flatpaks": {"packages": [], "overrides": {}},
     "autostart": [],
     "shortcuts": [],
-    "services": {},
+    "units": [],
     "autoupdate": {"enabled": False, "schedule": "Sun 04:00", "mode": "boot", "reboot": False, "flatpaks": True},
 }
+
+UNITS_DIR = CONFIG_DIR / "Config" / "units"
+UNIT_SUFFIXES = (".service", ".timer", ".socket", ".path", ".target", ".mount", ".automount")
 
 # Keys under [Context] in a flatpak override file hold ';'-separated lists.
 LIST_KEYS = {"shared", "sockets", "devices", "features", "filesystems", "persistent"}
@@ -298,6 +303,67 @@ def import_autostart(entries):
 
 
 # ---------------------------------------------------------------------------
+# systemd units
+
+
+def unit_wanted_by(path):
+    """Targets named in the unit's [Install] WantedBy= lines."""
+    parser = configparser.ConfigParser(interpolation=None, delimiters=("=",), strict=False)
+    parser.optionxform = str
+    try:
+        parser.read(path, encoding="utf-8")
+    except (OSError, configparser.Error):
+        return []
+    if "Install" not in parser:
+        return []
+    return parser["Install"].get("WantedBy", "").split()
+
+
+def guess_unit_scope(wanted_by):
+    user_targets = {"default.target", "graphical-session.target", "basic.target"}
+    return "user" if wanted_by and all(t in user_targets or t == "timers.target" for t in wanted_by) and "default.target" in wanted_by else "system"
+
+
+def add_unit(path, scope, enabled=True):
+    """Copy a unit file into the repo and record it; returns the entry."""
+    path = Path(path)
+    if path.suffix not in UNIT_SUFFIXES:
+        raise ValueError(f"{path.name} is not a systemd unit file")
+    if scope not in ("system", "user"):
+        raise ValueError("scope must be system or user")
+    UNITS_DIR.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(path, UNITS_DIR / path.name)
+    entry = {"file": path.name, "scope": scope, "enabled": bool(enabled), "wantedBy": unit_wanted_by(path)}
+    units = [u for u in load_json("units") if u["file"] != path.name] + [entry]
+    units.sort(key=lambda u: u["file"])
+    save_json("units", units)
+    return entry
+
+
+def remove_unit(name):
+    units = load_json("units")
+    keep = [u for u in units if u["file"] != name]
+    if len(keep) == len(units):
+        return False
+    save_json("units", keep)
+    try:
+        (UNITS_DIR / name).unlink()
+    except OSError:
+        pass
+    return True
+
+
+def commit_units(log):
+    log(git_commit([FILES["units"], UNITS_DIR], "Services: update systemd units"))
+
+
+def unit_status(entry):
+    argv = ["systemctl"] + (["--user"] if entry["scope"] == "user" else []) + ["is-active", entry["file"]]
+    out = run_capture(argv).strip()
+    return out or "not loaded"
+
+
+# ---------------------------------------------------------------------------
 # Steps: each is ("title", callable(log)) or ("title", argv). Shared by CLI and GUI.
 
 
@@ -415,6 +481,25 @@ def cli(args):
         return run_steps_cli(push_steps())
     if args.command == "reboot":
         os.execvp("systemctl", ["systemctl", "reboot"])
+    if args.command == "unit":
+        if args.unit_command == "list":
+            for u in load_json("units"):
+                print(f'{u["file"]:32} {u["scope"]:7} {"enabled" if u["enabled"] else "disabled":9} {unit_status(u)}')
+            return 0
+        if args.unit_command == "add":
+            scope = "user" if args.user else "system"
+            entry = add_unit(args.file, scope, enabled=not args.disabled)
+            print(f'Added {entry["file"]} as a {scope} unit, wanted by {", ".join(entry["wantedBy"]) or "nothing"}')
+            commit_units(echo)
+            print("Run `nixos-updater apply` to install it.")
+            return 0
+        if args.unit_command == "remove":
+            if not remove_unit(args.name):
+                print(f"{args.name} is not in the config", file=sys.stderr)
+                return 1
+            commit_units(echo)
+            print("Run `nixos-updater apply` to remove it from the system.")
+            return 0
     return 0
 
 
@@ -628,33 +713,132 @@ def gui(smoke_test=False):
             if save_and_commit("shortcuts", self.entries, "Shortcuts: update custom command shortcuts", self.window.log):
                 self.window.needs_apply()
 
-    class ServicesTab(QWidget):
+    class DropTable(QTableWidget):
+        """A table that accepts unit files dropped from the file manager."""
+
+        def __init__(self, on_files):
+            super().__init__(0, 4)
+            self.on_files = on_files
+            self.setAcceptDrops(True)
+
+        def dragEnterEvent(self, event):  # noqa: N802 - Qt API
+            if any(u.isLocalFile() and u.toLocalFile().endswith(UNIT_SUFFIXES) for u in event.mimeData().urls()):
+                event.acceptProposedAction()
+
+        def dragMoveEvent(self, event):  # noqa: N802 - Qt API
+            event.acceptProposedAction()
+
+        def dropEvent(self, event):  # noqa: N802 - Qt API
+            paths = [u.toLocalFile() for u in event.mimeData().urls() if u.isLocalFile() and u.toLocalFile().endswith(UNIT_SUFFIXES)]
+            if paths:
+                event.acceptProposedAction()
+                self.on_files(paths)
+
+    class UnitsTab(QWidget):
         def __init__(self, window):
             super().__init__()
             self.window = window
-            self.data = load_json("services")
+            self.units = load_json("units")
+            self.dirty = False
             layout = QVBoxLayout(self)
-            layout.addWidget(hint("System services this config knows how to set up. Tick what you want, save, then Apply."))
-            self.boxes = {}
-            for name in sorted(self.data):
-                box = QCheckBox(f'{name}  —  {self.data[name].get("description", "")}')
-                box.setChecked(bool(self.data[name].get("enabled")))
-                self.boxes[name] = box
-                layout.addWidget(box)
-            layout.addStretch(1)
+            layout.addWidget(hint("systemd units kept in the config. Drop .service or .timer files here (or use Add). "
+                                  "The file is copied into Config/units/ and installed on the next Apply; a unit is "
+                                  "started at boot when Enabled is ticked and its [Install] section names a target."))
+            self.table = DropTable(self.add_files)
+            self.table.setHorizontalHeaderLabels(["Unit", "Scope", "Enabled", "Status"])
+            self.table.horizontalHeader().setStretchLastSection(True)
+            self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+            self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+            self.table.itemChanged.connect(self.toggled)
+            layout.addWidget(self.table, 1)
             row = QHBoxLayout()
+            add = QPushButton(icon("list-add"), "Add unit file…")
+            add.clicked.connect(self.add_dialog)
+            remove = QPushButton(icon("list-remove"), "Remove")
+            remove.clicked.connect(self.remove)
+            refresh = QPushButton(icon("view-refresh"), "Refresh status")
+            refresh.clicked.connect(self.refresh)
+            row.addWidget(add)
+            row.addWidget(remove)
+            row.addWidget(refresh)
             row.addStretch(1)
             save = QPushButton(icon("document-save"), "Save")
             save.clicked.connect(self.save)
             row.addWidget(save)
             layout.addLayout(row)
+            self.refresh()
+
+        def refresh(self):
+            self.table.blockSignals(True)
+            self.table.setRowCount(0)
+            for u in self.units:
+                r = self.table.rowCount()
+                self.table.insertRow(r)
+                self.table.setItem(r, 0, QTableWidgetItem(icon("system-run"), u["file"]))
+                self.table.setItem(r, 1, QTableWidgetItem(u["scope"]))
+                enabled = QTableWidgetItem()
+                enabled.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+                enabled.setCheckState(Qt.CheckState.Checked if u["enabled"] else Qt.CheckState.Unchecked)
+                self.table.setItem(r, 2, enabled)
+                self.table.setItem(r, 3, QTableWidgetItem(unit_status(u)))
+            self.table.resizeColumnsToContents()
+            self.table.blockSignals(False)
+
+        def toggled(self, item):
+            if item.column() == 2 and item.row() < len(self.units):
+                self.units[item.row()]["enabled"] = item.checkState() == Qt.CheckState.Checked
+                self.dirty = True
+
+        def add_files(self, paths):
+            for path in paths:
+                wanted = unit_wanted_by(path)
+                suggested = guess_unit_scope(wanted)
+                box = QMessageBox(self)
+                box.setWindowTitle("Add unit")
+                box.setText(f"Install {os.path.basename(path)} as which kind of unit?\n\n"
+                            f"Wanted by: {', '.join(wanted) or 'nothing (will not start on its own)'}")
+                system = box.addButton("System", QMessageBox.ButtonRole.AcceptRole)
+                user = box.addButton("User", QMessageBox.ButtonRole.AcceptRole)
+                box.addButton(QMessageBox.StandardButton.Cancel)
+                box.setDefaultButton(user if suggested == "user" else system)
+                box.exec()
+                if box.clickedButton() is system:
+                    scope = "system"
+                elif box.clickedButton() is user:
+                    scope = "user"
+                else:
+                    continue
+                try:
+                    add_unit(path, scope)
+                except (OSError, ValueError) as e:
+                    QMessageBox.warning(self, "Add unit", str(e))
+                    continue
+                self.window.log(f"Added {os.path.basename(path)} ({scope}) to Config/units/")
+            self.units = load_json("units")
+            self.dirty = True
+            self.refresh()
+
+        def add_dialog(self):
+            from PyQt6.QtWidgets import QFileDialog
+            paths, _ = QFileDialog.getOpenFileNames(self, "Add systemd unit files", str(Path.home()),
+                                                    "systemd units (*.service *.timer *.socket *.path *.target *.mount)")
+            if paths:
+                self.add_files(paths)
+
+        def remove(self):
+            rows = sorted({i.row() for i in self.table.selectedIndexes()}, reverse=True)
+            for r in rows:
+                remove_unit(self.units[r]["file"])
+            self.units = load_json("units")
+            self.dirty = True
+            self.refresh()
 
         def save(self):
-            for name, box in self.boxes.items():
-                self.data[name]["enabled"] = box.isChecked()
-            self.window.log("\n==> Saving service toggles")
-            if save_and_commit("services", self.data, "Services: update toggles", self.window.log):
-                self.window.needs_apply()
+            save_json("units", self.units)
+            self.window.log("\n==> Saving systemd units")
+            commit_units(self.window.log)
+            self.dirty = False
+            self.window.needs_apply()
 
     class AutoUpdateTab(QWidget):
         def __init__(self, window):
@@ -768,7 +952,7 @@ def gui(smoke_test=False):
             self.tabs.addTab(self.system_tab(), icon("system-software-update"), "System")
             self.tabs.addTab(AutostartTab(self), icon("preferences-desktop-startup", "system-run"), "Autostart")
             self.tabs.addTab(ShortcutsTab(self), icon("preferences-desktop-keyboard", "input-keyboard"), "Shortcuts")
-            self.tabs.addTab(ServicesTab(self), icon("preferences-system-services", "system-run"), "Services")
+            self.tabs.addTab(UnitsTab(self), icon("preferences-system-services", "system-run"), "Services")
             self.tabs.addTab(AutoUpdateTab(self), icon("chronometer", "appointment-new"), "Auto Updates")
             outer.addWidget(self.tabs, 1)
 
@@ -955,6 +1139,13 @@ def main():
     sub.add_parser("flush", help="remove old generations and unused flatpaks")
     sub.add_parser("push", help="git push the config repo")
     sub.add_parser("reboot", help="reboot")
+    unit = sub.add_parser("unit", help="manage systemd units kept in the config").add_subparsers(dest="unit_command")
+    ua = unit.add_parser("add", help="copy a unit file into the config")
+    ua.add_argument("file")
+    ua.add_argument("--user", action="store_true", help="install as a user unit instead of a system unit")
+    ua.add_argument("--disabled", action="store_true", help="install but do not enable")
+    unit.add_parser("remove", help="remove a unit from the config").add_argument("name")
+    unit.add_parser("list", help="list units and their status")
     args = parser.parse_args()
     if args.command in (None, "gui"):
         return gui(smoke_test=getattr(args, "smoke_test", False))
