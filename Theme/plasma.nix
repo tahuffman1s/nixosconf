@@ -1,5 +1,6 @@
 { config, pkgs, lib, ...}:
 let 
+  hw = { laptop = false; } // builtins.fromJSON (builtins.readFile ../hardware.json);
   # Shipped in this repo (Files/), unpacked in a derivation instead of being
   # downloaded from GitHub at evaluation time.
   kdeTheme = pkgs.runCommand "dracula-kde-theme" { } ''
@@ -27,6 +28,15 @@ in
     };
     # Let fullscreen games bypass the compositor's vsync for lower latency.
     configFile.kwinrc.Wayland.AllowTearing = true;
+
+    # Laptops: the power profile Plasma re-applies whenever the power source
+    # changes, at login and after sleep. Picking one in the battery tray icon
+    # only lasts until the next such event; this is the setting behind it.
+    powerdevil = lib.mkIf hw.laptop {
+      AC.powerProfile = "performance";
+      battery.powerProfile = "balanced";
+      lowBattery.powerProfile = "powerSaving";
+    };
     # Custom command shortcuts, managed by NixOS Updater (Shortcuts tab).
     hotkeys.commands = lib.listToAttrs (map (s: {
       name = lib.toLower (builtins.replaceStrings [ " " ] [ "-" ] s.name);
