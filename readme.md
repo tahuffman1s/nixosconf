@@ -59,7 +59,7 @@ Update) rebuilds:
 | Shortcuts | `Home/shortcuts.json` | Global shortcuts that run a command (plasma-manager hotkeys), recorded with a key editor |
 | System Units | `Config/units.json`, `Config/units/` | systemd units for the whole machine: drop `.service`/`.timer` files, or create a timer from a name, command and schedule |
 | User Units | same | The same for home-manager units that run as you inside your session |
-| Scripts | `Home/scripts.json`, `Home/scripts/` | Bash or Python scripts plus companion files; installed to `~/.local/share/nixos-scripts/` and scripts onto PATH via `~/.local/bin`; Run and Edit buttons; the timer wizard can pick one; scripts ticked "After update" run at the end of every Update or Apply, attended or not; "As root" runs a script with root rights, from the copy the system build installs under `/etc/nixos-scripts/` |
+| Scripts | `Home/scripts.json`, `Home/scripts/` | Bash or Python scripts plus companion files; installed side by side in `~/.local/share/nixos-scripts/` (root scripts and their companions in `/etc/nixos-scripts/`) and run from there, so `$(dirname "$0")` finds a companion file next to the script; `~/.local/bin` wrappers put scripts on PATH; Run and Edit buttons; the timer wizard can pick one; scripts ticked "After update" run at the end of every Update or Apply, attended or not; "As root" runs a script with root rights, from the copy the system build installs under `/etc/nixos-scripts/` |
 | Auto Updates | `Config/autoupdate.json` | A systemd timer that refreshes inputs, rebuilds (for next boot or immediately), updates Flatpaks, and can reboot when the kernel changed |
 
 Terminal equivalents: `nixos-updater unit add|remove|list` and

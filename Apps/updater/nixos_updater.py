@@ -508,7 +508,7 @@ def script_step(entry):
     the repo copy, so it works before the first Apply too)."""
     if entry.get("root"):
         return (f'Running {entry["file"]} as root', root_cmd("run-script", entry["file"]))
-    installed = Path.home() / ".local" / "bin" / entry["file"]
+    installed = Path.home() / ".local" / "share" / "nixos-scripts" / entry["file"]
     run_installed = " ".join(f"'{a}'" for a in script_run_cmd(entry, installed))
     run_repo = " ".join(f"'{a}'" for a in script_run_cmd(entry))
     return (f'Running {entry["file"]}',
@@ -1335,11 +1335,11 @@ def gui(smoke_test=False):
 
     class ScriptsPage(Page):
         title = "Scripts"
-        subtitle = ("Bash or Python scripts and the files they need. Kept in Home/scripts/, installed to "
-                    "~/.local/share/nixos-scripts/, and scripts also go on your PATH via ~/.local/bin. A script finds "
-                    "its companion files in its own directory. Tick \"After update\" to run a script at the end of "
-                    "every Update, including unattended ones, and \"As root\" to run it with root rights "
-                    "(through the same password prompt as the rebuild).")
+        subtitle = ("Bash or Python scripts and the files they need, kept together in Home/scripts/ and installed "
+                    "side by side in ~/.local/share/nixos-scripts/ (root scripts: /etc/nixos-scripts/), so "
+                    "$(dirname \"$0\") or __file__ finds a companion file next to the script. Scripts are also on "
+                    "your PATH. Tick \"After update\" to run a script at the end of every Update or Apply, and "
+                    "\"As root\" to run it with root rights through the same password prompt as the rebuild.")
 
         def body(self):
             self.table = DropTable(["File", "Kind", "On PATH", "After update", "As root"], (), self.add_files,

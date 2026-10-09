@@ -1,36 +1,39 @@
 { config, pkgs, lib, ...}:
 let 
   # Scripts and their companion files from NixOS Updater (Scripts page).
-  # Everything in Home/scripts/ listed in scripts.json is installed under
-  # ~/.local/share/nixos-scripts/; entries marked "script" also get a link in
-  # ~/.local/bin so they are on PATH. Both links resolve into the same
-  # directory, so a script finds its companion files next to itself
-  # (Python's sys.path[0] and `dirname "$(readlink -f "$0")"` both see them).
+  # Everything in Home/scripts/ listed in scripts.json is installed side by
+  # side in ~/.local/share/nixos-scripts/, and scripts are run from there, so
+  # `$(dirname "$0")` or Python's __file__ finds the companion files next to
+  # the script. ~/.local/bin/<script> is a small wrapper that runs that copy,
+  # which puts the scripts on PATH.
   #
-  # Scripts marked "postUpdate" are run, in name order, by the generated
-  # ~/.local/share/nixos-scripts/post-update after every update (the app's
-  # Update action and the unattended updater both call it). A failing script
-  # is reported but does not stop the others.
+  # Scripts marked "postUpdate" (and not "root") are run, in name order, by
+  # the generated post-update runner after every update; the app runs them
+  # itself and the unattended updater uses the runner. Scripts marked "root"
+  # are handled by Config/root-scripts.nix.
   entries = builtins.fromJSON (builtins.readFile ./scripts.json);
-  file = e: ./scripts + "/${e.file}";
-  # Scripts flagged "root" are handled by Config/root-scripts.nix instead.
-  postUpdate = builtins.filter (e: e.script && (e.postUpdate or false) && !(e.root or false)) entries;
+  dir = "${config.home.homeDirectory}/.local/share/nixos-scripts";
   # Call the interpreter explicitly: a "#!/bin/bash" shebang does not resolve on NixOS.
   interpreter = e: { python = "${pkgs.python3}/bin/python3 "; bash = "${pkgs.bash}/bin/bash "; }.${e.kind or ""} or "";
+  wrapper = e: ''
+    #!${pkgs.runtimeShell}
+    exec ${interpreter e}"${dir}/${e.file}" "$@"
+  '';
+  postUpdate = builtins.filter (e: e.script && (e.postUpdate or false) && !(e.root or false)) entries;
   runner = pkgs.writeShellScript "nixos-post-update" ''
     status=0
     ${lib.concatMapStringsSep "\n" (e: ''
       echo "==> ${e.file}"
-      ${interpreter e}"$HOME/.local/bin/${e.file}" || { echo "==> ${e.file} failed with exit code $?"; status=1; }
+      ${interpreter e}"${dir}/${e.file}" || { echo "==> ${e.file} failed with exit code $?"; status=1; }
     '') postUpdate}
-    ${lib.optionalString (postUpdate == [ ]) ''echo "No post-update scripts configured."''}
+    ${lib.optionalString (postUpdate == [ ]) ''echo "Nothing to run."''}
     exit $status
   '';
 in 
 {
   home.file = lib.listToAttrs (lib.concatMap (e:
-    [ { name = ".local/share/nixos-scripts/${e.file}"; value.source = file e; } ]
-    ++ lib.optional e.script { name = ".local/bin/${e.file}"; value.source = file e; }
+    [ { name = ".local/share/nixos-scripts/${e.file}"; value.source = ./scripts + "/${e.file}"; } ]
+    ++ lib.optional e.script { name = ".local/bin/${e.file}"; value = { text = wrapper e; executable = true; }; }
   ) entries) // {
     ".local/share/nixos-scripts/post-update".source = runner;
   };

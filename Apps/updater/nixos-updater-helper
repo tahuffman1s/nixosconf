@@ -33,7 +33,7 @@ case "$action" in
     name="${3:?script name}"
     case "$name" in */*|.*|post-update-root) echo "bad script name" >&2; exit 2;; esac
     script="/etc/nixos-scripts/$name"
-    if [ ! -e "$script" ]; then
+    if [ ! -e "$script" ] || ! grep -qx "$name" /etc/nixos-scripts/.root-scripts 2>/dev/null; then
       echo "$name is not installed as a root script yet; tick \"As root\" and Apply first" >&2
       exit 2
     fi
