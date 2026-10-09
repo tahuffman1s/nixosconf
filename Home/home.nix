@@ -11,6 +11,7 @@ in
    ./units.nix
    ./scripts.nix
    ./defaults.nix
+   ./dotfiles.nix
    ../Apps/git.nix
    ../Apps/starship.nix
    ../Apps/kitty.nix

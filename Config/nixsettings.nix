@@ -8,6 +8,9 @@ in
   # Let scripts written for other distros run as-is: /bin/bash, /usr/bin/env
   # python3 and friends resolve to whatever is on PATH.
   services.envfs.enable = true;
+  # Let ordinary (non-Nix) dynamically linked binaries run, e.g. a downloaded
+  # service binary started from a dropped-in systemd unit.
+  programs.nix-ld.enable = true;
 
   # /etc/nixos is a symlink to the user's checkout. Root runs nixos-rebuild
   # (and the updater app runs it through polkit), and nix refuses to read a git repo

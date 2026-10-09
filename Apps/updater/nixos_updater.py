@@ -17,6 +17,7 @@ GUI by default (Qt, follows the Plasma style). Subcommands for the terminal:
     nixos-updater defaults list | set CATEGORY DESKTOP-FILE | import
     nixos-updater app search TERM [--flathub|--nixpkgs] | add (--flatpak|--nix) ID | remove ID
     nixos-updater udev add FILE... | remove NAME | list
+    nixos-updater dotfile add PATH [--target REL] | remove REL | list
 """
 
 import argparse
@@ -79,6 +80,7 @@ SCRIPTS_DIR = CONFIG_DIR / "Home" / "scripts"
 UNIT_SUFFIXES = (".service", ".timer", ".socket", ".path", ".target", ".mount", ".automount")
 SCRIPT_SUFFIXES = (".sh", ".bash", ".py")
 UDEV_DIR = CONFIG_DIR / "Config" / "udev"
+DOTFILES_DIR = CONFIG_DIR / "Home" / "dotfiles"
 
 # Keys under [Context] in a flatpak override file hold ';'-separated lists.
 LIST_KEYS = {"shared", "sockets", "devices", "features", "filesystems", "persistent"}
@@ -591,6 +593,64 @@ def commit_udev(log):
 
 
 # ---------------------------------------------------------------------------
+# Dotfiles: Home/dotfiles/ mirrors the home directory (Home/dotfiles.nix)
+
+
+def dotfiles():
+    """Relative targets of every dotfile kept in the repo."""
+    if not DOTFILES_DIR.is_dir():
+        return []
+    return sorted(str(p.relative_to(DOTFILES_DIR)) for p in DOTFILES_DIR.rglob("*")
+                  if p.is_file() and p.name != ".gitkeep")
+
+
+def home_relative(path):
+    """Path relative to the home directory, or None if outside it."""
+    try:
+        return str(Path(path).resolve().relative_to(Path.home().resolve()))
+    except ValueError:
+        try:
+            return str(Path(path).relative_to(Path.home()))
+        except ValueError:
+            return None
+
+
+def add_dotfile(path, target=None):
+    """Copy a file into Home/dotfiles/<target>; target defaults to its place in your home."""
+    path = Path(path)
+    target = (target or home_relative(path) or "").strip("/")
+    if not target or target.startswith("..") or Path(target).is_absolute():
+        raise ValueError(f"{path} is not inside your home; give it a target path such as .config/app/app.conf")
+    dest = DOTFILES_DIR / target
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(path, dest)  # follows a home-manager symlink and copies the content
+    git_stage([dest])
+    return target
+
+
+def remove_dotfile(target):
+    dest = DOTFILES_DIR / target
+    try:
+        dest.unlink()
+    except OSError:
+        return False
+    parent = dest.parent
+    while parent != DOTFILES_DIR and parent.is_dir() and not any(parent.iterdir()):
+        parent.rmdir()
+        parent = parent.parent
+    return True
+
+
+def commit_dotfiles(log):
+    log(git_commit([DOTFILES_DIR], "Dotfiles: update"))
+
+
+def unit_log_cmd(entry):
+    return ["journalctl"] + (["--user"] if entry["scope"] == "user" else []) + \
+           ["-u", entry["file"], "-b", "--no-pager", "-n", "60"]
+
+
+# ---------------------------------------------------------------------------
 # Scripts
 
 
@@ -979,6 +1039,27 @@ def cli(args):
             if steps:
                 return run_steps_cli(steps)
             print("Run `nixos-updater apply` to remove it from the system.")
+            return 0
+    if args.command == "dotfile":
+        if args.dotfile_command == "list":
+            for t in dotfiles():
+                print(t)
+            return 0
+        if args.dotfile_command == "add":
+            try:
+                target = add_dotfile(args.path, args.target)
+            except ValueError as e:
+                print(e, file=sys.stderr)
+                return 1
+            print(f"Added ~/{target}")
+            commit_dotfiles(echo)
+            print("Run `nixos-updater apply` to install it.")
+            return 0
+        if args.dotfile_command == "remove":
+            if not remove_dotfile(args.target):
+                print(f"{args.target} is not in the config", file=sys.stderr)
+                return 1
+            commit_dotfiles(echo)
             return 0
     if args.command == "udev":
         if args.udev_command == "list":
@@ -1645,6 +1726,7 @@ def gui(smoke_test=False):
             self.layout_.addWidget(self.table, 1)
             self.actions(button("Add unit file…", ["list-add"], self.add_dialog),
                          button("New timer…", ["chronometer", "appointment-new"], self.new_timer),
+                         button("Show log", ["view-list-text", "text-x-log"], self.show_log),
                          button("Remove", ["list-remove"], self.remove),
                          button("Refresh status", ["view-refresh"], self.refresh), save=self.save)
             self.refresh()
@@ -1706,6 +1788,14 @@ def gui(smoke_test=False):
             self.log(f'Created {entry["file"]} and its service ({self.scope}), schedule: {schedule}')
             self.refresh()
 
+        def show_log(self):
+            rows = selected_rows(self.table)
+            if not rows:
+                self.log("Select a unit first.")
+                return
+            entry = self.rows[rows[-1]]
+            self.window.run([(f'Log of {entry["file"]} (this boot, last 60 lines)', unit_log_cmd(entry))], "")
+
         def remove(self):
             for r in selected_rows(self.table):
                 remove_unit(self.rows[r]["file"])
@@ -1727,6 +1817,73 @@ def gui(smoke_test=False):
         subtitle = ("home-manager units that run inside your session as you. Timers here can use %h for your "
                     "home directory. The file is kept in Config/units/.")
         scope = "user"
+
+    class DotfilesPage(Page):
+        title = "Dotfiles"
+        subtitle = ("Config files for your apps, kept in Home/dotfiles/ which mirrors your home directory: "
+                    "Home/dotfiles/.config/kitty/kitty.conf becomes ~/.config/kitty/kitty.conf. Add a file from your "
+                    "home and it keeps its place. A dotfile takes over from any config home-manager generates for "
+                    "the same app (kitty, starship, git, ...).")
+
+        def body(self):
+            self.table = DropTable(["In your home", "Size"], (), self.add_files, "Drop config files here")
+            self.layout_.addWidget(self.table, 1)
+            self.actions(button("Add from home…", ["list-add"], self.add_dialog),
+                         button("Edit", ["document-edit"], self.edit),
+                         button("Remove", ["list-remove"], self.remove), save=self.save)
+            self.refresh()
+
+        def refresh(self):
+            self.rows = dotfiles()
+            self.table.setRowCount(0)
+            for t in self.rows:
+                r = self.table.rowCount()
+                self.table.insertRow(r)
+                self.table.setItem(r, 0, QTableWidgetItem(icon("text-x-generic"), "~/" + t))
+                try:
+                    size = (DOTFILES_DIR / t).stat().st_size
+                except OSError:
+                    size = 0
+                self.table.setItem(r, 1, QTableWidgetItem(f"{size} B" if size < 4096 else f"{size // 1024} KiB"))
+            self.table.resizeColumnToContents(0)
+
+        def add_files(self, paths):
+            from PyQt6.QtWidgets import QInputDialog
+            for path in paths:
+                target = home_relative(path)
+                if target is None or target.startswith(".."):
+                    name = os.path.basename(path)
+                    target, ok = QInputDialog.getText(self, "Where does it go?",
+                                                      f"{name} is not inside your home.\nPath relative to your home:",
+                                                      text=f".config/{name}")
+                    if not ok or not target.strip():
+                        continue
+                try:
+                    self.log("Added ~/" + add_dotfile(path, target))
+                except (OSError, ValueError) as e:
+                    QMessageBox.warning(self, "Add dotfile", str(e))
+            self.refresh()
+
+        def add_dialog(self):
+            paths, _ = QFileDialog.getOpenFileNames(self, "Add config files from your home", str(Path.home() / ".config"),
+                                                    "All files (*)")
+            if paths:
+                self.add_files(paths)
+
+        def edit(self):
+            rows = selected_rows(self.table)
+            if rows:
+                QDesktopServices.openUrl(QUrl.fromLocalFile(str(DOTFILES_DIR / self.rows[rows[-1]])))
+
+        def remove(self):
+            for r in selected_rows(self.table):
+                remove_dotfile(self.rows[r])
+            self.refresh()
+
+        def save(self):
+            self.log("\n==> Saving dotfiles")
+            commit_dotfiles(self.log)
+            self.window.needs_apply()
 
     class UdevPage(Page):
         title = "udev Rules"
@@ -2052,6 +2209,7 @@ def gui(smoke_test=False):
                 (UserUnitsPage, ["user-identity", "system-users"]),
                 (ScriptsPage, ["text-x-script", "utilities-terminal"]),
                 (UdevPage, ["preferences-desktop-peripherals", "input-gaming"]),
+                (DotfilesPage, ["preferences-desktop-theme", "folder-documents"]),
                 (DefaultsPage, ["preferences-desktop-default-applications", "preferences-desktop"]),
                 (AutoUpdatePage, ["chronometer", "appointment-new"]),
             ]:
@@ -2353,6 +2511,12 @@ def main():
     udev.add_parser("add", help="copy *.rules files into the config").add_argument("files", nargs="+")
     udev.add_parser("remove", help="remove a rules file from the config").add_argument("name")
     udev.add_parser("list", help="list the rules files")
+    dot = sub.add_parser("dotfile", help="dotfiles kept in the config").add_subparsers(dest="dotfile_command")
+    da = dot.add_parser("add", help="copy a file from your home into the config")
+    da.add_argument("path")
+    da.add_argument("--target", help="where it goes, relative to your home (default: where it is now)")
+    dot.add_parser("remove", help="remove a dotfile from the config").add_argument("target")
+    dot.add_parser("list", help="list the dotfiles")
     args = parser.parse_args()
     if args.command == "app" and args.app_command == "add" and not (args.flatpak or args.nix):
         parser.error("app add needs --flatpak or --nix")

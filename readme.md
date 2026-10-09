@@ -61,12 +61,14 @@ Update) rebuilds:
 | User Units | same | The same for home-manager units that run as you inside your session |
 | Scripts | `Home/scripts.json`, `Home/scripts/` | Bash or Python scripts plus companion files; installed side by side in `~/.local/share/nixos-scripts/` (root scripts and their companions in `/etc/nixos-scripts/`) and run from there, so `$(dirname "$0")` finds a companion file next to the script; `~/.local/bin` wrappers put scripts on PATH; Run and Edit buttons; the timer wizard can pick one; scripts ticked "After update" run at the end of every Update or Apply, attended or not; "As root" runs a script with root rights, from the copy the system build installs under `/etc/nixos-scripts/` |
 | udev Rules | `Config/udev/` | Drop `*.rules` files; installed as a udev rules package under `/etc/udev/rules.d` on the next Apply |
+| Dotfiles | `Home/dotfiles/` | Config files for your apps; the folder mirrors your home (`Home/dotfiles/.config/kitty/kitty.conf` becomes `~/.config/kitty/kitty.conf`) and a dotfile takes over from what a home-manager module would generate for the same app |
 | Default Apps | `Home/defaults.json` | Which app opens web links, mail, folders, text, images, video, music, PDFs, archives and torrents, plus the terminal; applied through `xdg.mimeApps` and kdeglobals; can import Plasma's current choices |
 | Auto Updates | `Config/autoupdate.json` | A systemd timer that refreshes inputs, rebuilds (for next boot or immediately), updates Flatpaks, and can reboot when the kernel changed |
 
 Terminal equivalents: `nixos-updater unit add|remove|list`,
 `nixos-updater script add|remove|run|list`, `nixos-updater defaults list|set|import`,
-`nixos-updater app search|add|remove` and `nixos-updater udev add|remove|list`.
+`nixos-updater app search|add|remove`, `nixos-updater udev add|remove|list` and
+`nixos-updater dotfile add|remove|list`.
 
 ## Layout
 
@@ -79,7 +81,7 @@ Terminal equivalents: `nixos-updater unit add|remove|list`,
 | `Config/` | Boot, hardware, networking, locale, services, users, nix settings |
 | `Apps/` | Per-app modules (Steam, kitty, fish, VSCodium, Zen, the updater app, ...) |
 | `Apps/flatpaks.json` | Installed Flatpaks and their permissions, kept in sync by the updater |
-| `Home/packages.json`, `Home/autostart.json`, `Home/shortcuts.json`, `Home/scripts.json` + `Home/scripts/`, `Home/defaults.json`, `Config/units.json` + `Config/units/`, `Config/udev/`, `Config/autoupdate.json` | Edited by the updater's pages |
+| `Home/packages.json`, `Home/autostart.json`, `Home/shortcuts.json`, `Home/scripts.json` + `Home/scripts/`, `Home/defaults.json`, `Home/dotfiles/`, `Config/units.json` + `Config/units/`, `Config/udev/`, `Config/autoupdate.json` | Edited by the updater's pages |
 | `Home/` | home-manager entry point, native packages, home folder links |
 | `Theme/` | Plasma and GTK theming |
 | `Files/` | Theme archives unpacked at build time |
