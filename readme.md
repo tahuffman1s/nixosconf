@@ -13,15 +13,40 @@ curl -fsSL https://raw.githubusercontent.com/tahuffman1s/nixosconf/main/setup.sh
 ```
 
 That is the only step after a plain NixOS install. The script builds the
-config for the account that ran `sudo`. It clones this repo into `~/nixosconf`
-(owned by you), points `/etc/nixos` at it, writes `user.nix` with your account
-name, generates `hardware-configuration.nix`, finds the GD1 and GD2 drives for
-`drives.nix` (by current mount, filesystem label, known UUID, or by asking) and
-mounts them, runs `nixos-rebuild switch --flake /etc/nixos`, installs the
-Flatpaks, and reboots into the new system. Files that home-manager wants to
-own are moved aside with an `.hm-backup` suffix rather than stopping the build.
-Rerunning it on a machine that already has the clone just pulls and switches.
-Set `NIXOSCONF_NO_REBOOT=1` to skip the reboot.
+config for the account that ran `sudo`. It opens a small terminal UI (gum,
+fetched from nixpkgs) that asks three things, with what it detected already
+selected: the graphics card, the processor, and whether the machine is a
+laptop. Enter through the questions keeps the detected answers. Then it clones
+this repo into `~/nixosconf` (owned by you), points `/etc/nixos` at it, writes
+`user.nix` with your account name and `hardware.json` with those answers,
+generates `hardware-configuration.nix`, finds the GD1 and GD2 drives for
+`drives.nix` (by current mount, filesystem label, known UUID, or a picker over
+the partitions) and mounts them, runs `nixos-rebuild switch --flake
+/etc/nixos`, installs the Flatpaks, and reboots into the new system. Files
+that home-manager wants to own are moved aside with an `.hm-backup` suffix
+rather than stopping the build. Rerunning it on a machine that already has
+the clone asks the hardware questions again (defaulting to the current
+`hardware.json`), pulls and switches. Set `NIXOSCONF_NO_REBOOT=1` to skip
+the reboot.
+
+Without a terminal, or with `NIXOSCONF_NO_UI=1`, it takes the detected
+hardware without asking; `NIXOSCONF_GPU=amd|nvidia|intel`,
+`NIXOSCONF_CPU=amd|intel` and `NIXOSCONF_LAPTOP=1|0` override detection.
+
+### Hardware profiles
+
+`hardware.json` drives `Config/hardware-profile.nix`:
+
+| Choice | What it turns on |
+| --- | --- |
+| GPU `amd` | Mesa, amdgpu in the initrd (early KMS), overdrive for clock and power limits, LACT |
+| GPU `nvidia` | The proprietary NVIDIA driver (latest branch) with NVIDIA's open kernel modules, kernel modesetting for Wayland, nvidia-settings, VA-API through nvidia-vaapi-driver, Ozone/Wayland for Chromium apps, nvtop; the kernel drops from `linuxPackages_latest` to the default kernel so the modules build. Needs a Turing (RTX 20 / GTX 16) or newer card. |
+| GPU `intel` | Mesa, i915 in the initrd, intel-media-driver and intel-vaapi-driver (VA-API), OpenCL runtime, oneVPL, intel-gpu-tools |
+| CPU `amd` / `intel` | The matching microcode updates |
+| Laptop | power-profiles-daemon (Plasma's battery widget), thermald on Intel, Wi-Fi power saving, lid closes to suspend, power key suspends (long press powers off), rotation sensors, brightnessctl and powertop, zram swappiness back to 60, NVIDIA runtime power management when the GPU is NVIDIA |
+
+To change it later, edit `hardware.json` and run Apply in the updater, or
+rerun the setup one-liner.
 
 To use a branch other than `main`:
 
@@ -77,8 +102,9 @@ Terminal equivalents: `nixos-updater unit add|remove|list`,
 | `flake.nix` | Inputs and the `nixos` system definition |
 | `user.nix` | The account the config is built for (written by setup.sh) |
 | `drives.nix` | GD1 and GD2 mounts (written by setup.sh) |
+| `hardware.json` | GPU, CPU and laptop choices for `Config/hardware-profile.nix` (written by setup.sh) |
 | `configuration.nix` | System module list |
-| `Config/` | Boot, hardware, networking, locale, services, users, nix settings |
+| `Config/` | Boot, hardware profile, gaming tuning, networking, locale, services, printing, users, nix settings |
 | `Apps/` | Per-app modules (Steam, kitty, fish, VSCodium, Zen, the updater app, ...) |
 | `Apps/flatpaks.json` | Installed Flatpaks and their permissions, kept in sync by the updater |
 | `Home/packages.json`, `Home/autostart.json`, `Home/shortcuts.json`, `Home/scripts.json` + `Home/scripts/`, `Home/defaults.json`, `Home/dotfiles/`, `Config/units.json` + `Config/units/`, `Config/udev/`, `Config/autoupdate.json` | Edited by the updater's pages |

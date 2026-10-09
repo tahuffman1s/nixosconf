@@ -2,7 +2,8 @@
 let 
 in 
 {
-  # Ryzen 7 7700X, Radeon RX 7800 XT, 32 GB DDR5.
+  # Tuned on a Ryzen 7 7700X, Radeon RX 7800 XT, 32 GB DDR5; applies to
+  # every machine, with hardware.json choosing the GPU driver.
 
   # There was no swap at all before. zram gives games and shader compilation
   # somewhere to spill instead of getting OOM-killed, and costs nothing idle.
@@ -19,13 +20,8 @@ in
     scheduler = "scx_lavd";
   };
 
-  # Radeon: load amdgpu in the initrd (early KMS), allow clock and power
-  # limit changes, and install LACT to manage fan curves and limits.
-  hardware.amdgpu = {
-    initrd.enable = true;
-    overdrive.enable = true;
-  };
-  services.lact.enable = true;
+  # GPU driver bits (amdgpu/LACT, NVIDIA, Intel) live in
+  # Config/hardware-profile.nix, driven by hardware.json.
 
   # Full kernel preemption: lower latency for a little throughput.
   boot.kernelParams = [ "preempt=full" ];

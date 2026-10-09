@@ -5,15 +5,21 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/tahuffman1s/nixosconf/main/setup.sh | sudo bash
 #
-# It uses the account that ran sudo, clones the repo into that account's home,
-# points /etc/nixos at the clone, writes user.nix, hardware-configuration.nix
-# and drives.nix for this machine, and switches to the new system.
+# It uses the account that ran sudo, asks a few questions about the hardware
+# (GPU, CPU, laptop) with what it detected already selected, clones the repo
+# into that account's home, points /etc/nixos at the clone, writes user.nix,
+# hardware.json, hardware-configuration.nix and drives.nix for this machine,
+# and switches to the new system.
 #
 # Environment overrides:
 #   NIXOSCONF_BRANCH            branch to check out        (default: main)
 #   NIXOSCONF_DIR               where to clone             (default: ~/nixosconf)
 #   NIXOSCONF_REPO              git URL of the config repo
 #   NIXOSCONF_USER              account to set up          (default: the sudo user)
+#   NIXOSCONF_GPU               amd | nvidia | intel       (default: detected, then asked)
+#   NIXOSCONF_CPU               amd | intel                (default: detected, then asked)
+#   NIXOSCONF_LAPTOP            1 | 0                      (default: detected, then asked)
+#   NIXOSCONF_NO_UI=1           take the detected/overridden hardware without asking
 #   NIXOSCONF_REGEN_HARDWARE=1  rewrite hardware-configuration.nix and drives.nix
 #                               on an existing clone (always done on a fresh one)
 #   NIXOSCONF_NO_REBOOT=1       do not reboot at the end
@@ -111,6 +117,167 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Terminal UI: gum from nixpkgs when there is a terminal to draw on, plain
+# prompts otherwise. `curl | sudo bash` has the script on stdin, so every
+# prompt talks to /dev/tty directly.
+
+HAVE_TTY=0
+{ : </dev/tty >/dev/tty; } 2>/dev/null && HAVE_TTY=1
+NO_UI="${NIXOSCONF_NO_UI:-0}"
+
+GUM=""
+if [ "$HAVE_TTY" = 1 ] && [ "$NO_UI" != 1 ]; then
+  if command -v gum >/dev/null 2>&1; then
+    GUM="$(command -v gum)"
+  elif [ "$DRY_RUN" != 1 ]; then
+    say "Fetching the setup UI (gum) from nixpkgs"
+    out="$(nix build --no-link --print-out-paths "nixpkgs#gum^out" 2>/dev/null)" || out=""
+    [ -n "$out" ] || out="$(nix-build --no-out-link '<nixpkgs>' -A gum 2>/dev/null)" || out=""
+    [ -n "$out" ] && [ -x "$out/bin/gum" ] && GUM="$out/bin/gum"
+  fi
+fi
+
+# Every gum call draws on the terminal and reads keys from it.
+ui() { "$GUM" "$@" </dev/tty >/dev/tty; }
+
+# box "title" line...
+box() {
+  local title="$1"; shift
+  if [ -n "$GUM" ]; then
+    "$GUM" style --border rounded --border-foreground 212 --padding "0 2" --margin "1 0" \
+      "$("$GUM" style --bold --foreground 212 "$title")" "$@" >/dev/tty
+  else
+    echo; echo "  $title"; printf '    %s\n' "$@"; echo
+  fi
+}
+
+# choose "header" "default" item... -> prints the chosen item (first word is the key)
+choose() {
+  local header="$1" default="$2"; shift 2
+  local items=("$@") pick="" i=1 n
+  if [ -n "$GUM" ]; then
+    pick="$("$GUM" choose --header "$header" --selected "$default" --cursor "> " \
+             --header.foreground 212 --cursor.foreground 212 --selected.foreground 212 \
+             "${items[@]}" </dev/tty 2>/dev/tty)" || pick=""
+  elif [ "$HAVE_TTY" = 1 ] && [ "$NO_UI" != 1 ]; then
+    {
+      echo; echo "$header"
+      for n in "${items[@]}"; do
+        if [ "$n" = "$default" ]; then printf '  %d) %s  [default]\n' "$i" "$n"; else printf '  %d) %s\n' "$i" "$n"; fi
+        i=$((i + 1))
+      done
+    } >/dev/tty
+    read -r -p "Choice [1-${#items[@]}]: " n </dev/tty || n=""
+    [ "$n" -ge 1 ] 2>/dev/null && [ "$n" -le "${#items[@]}" ] && pick="${items[$((n - 1))]}"
+  fi
+  [ -n "$pick" ] || pick="$default"
+  printf '%s\n' "$pick"
+}
+
+# confirm "question" yes|no -> exit status
+confirm() {
+  local q="$1" default="$2" a
+  if [ -n "$GUM" ]; then
+    if [ "$default" = yes ]; then ui confirm --default=true "$q"; else ui confirm --default=false "$q"; fi
+    return $?
+  elif [ "$HAVE_TTY" = 1 ] && [ "$NO_UI" != 1 ]; then
+    if [ "$default" = yes ]; then read -r -p "$q [Y/n] " a </dev/tty || a=""; else read -r -p "$q [y/N] " a </dev/tty || a=""; fi
+    case "${a:-$default}" in y|Y|yes|YES) return 0 ;; n|N|no|NO) return 1 ;; esac
+    [ "$default" = yes ]
+    return $?
+  fi
+  [ "$default" = yes ]
+}
+
+# ---------------------------------------------------------------------------
+# Hardware detection. hardware.json tells Config/hardware-profile.nix which
+# GPU driver to use and whether to turn on the laptop power bits.
+
+detect_gpu() {
+  local f vendors=" "
+  for f in /sys/class/drm/card*/device/vendor /sys/bus/pci/devices/*/vendor; do
+    [ -r "$f" ] || continue
+    case "$f" in /sys/bus/pci/*) [ "$(cat "${f%/vendor}/class" 2>/dev/null)" = 0x030000 ] || continue ;; esac
+    vendors="$vendors$(cat "$f") "
+  done
+  case "$vendors" in
+    *" 0x10de "*) echo nvidia ;;   # a discrete NVIDIA card wins over an iGPU
+    *" 0x1002 "*) echo amd ;;
+    *" 0x8086 "*) echo intel ;;
+    *) echo amd ;;
+  esac
+}
+
+detect_cpu() {
+  case "$(grep -m1 '^vendor_id' /proc/cpuinfo 2>/dev/null)" in
+    *GenuineIntel*) echo intel ;;
+    *) echo amd ;;
+  esac
+}
+
+detect_laptop() {
+  local b
+  for b in /sys/class/power_supply/BAT*; do [ -e "$b" ] && { echo 1; return; }; done
+  case "$(cat /sys/class/dmi/id/chassis_type 2>/dev/null)" in
+    8|9|10|11|14|31|32) echo 1 ;;
+    *) echo 0 ;;
+  esac
+}
+
+# Defaults: the environment, then what an existing checkout already says,
+# then detection.
+read_hw() { # key -> value from an existing hardware.json, or nothing
+  [ -f "$DIR/hardware.json" ] || return 0
+  sed -n "s/^[[:space:]]*\"$1\"[[:space:]]*:[[:space:]]*\"\{0,1\}\([a-z0-9]*\)\"\{0,1\}.*/\1/p" "$DIR/hardware.json" | head -1
+}
+GPU="${NIXOSCONF_GPU:-$(read_hw gpu)}";       [ -n "$GPU" ] || GPU="$(detect_gpu)"
+CPU="${NIXOSCONF_CPU:-$(read_hw cpu)}";       [ -n "$CPU" ] || CPU="$(detect_cpu)"
+LAPTOP="${NIXOSCONF_LAPTOP:-$(read_hw laptop)}"
+case "$LAPTOP" in true|1) LAPTOP=1 ;; false|0) LAPTOP=0 ;; *) LAPTOP="$(detect_laptop)" ;; esac
+case "$GPU" in amd|nvidia|intel) ;; *) die "NIXOSCONF_GPU must be amd, nvidia or intel (got '$GPU')" ;; esac
+case "$CPU" in amd|intel) ;; *) die "NIXOSCONF_CPU must be amd or intel (got '$CPU')" ;; esac
+
+# No commas in these: gum's --selected takes a comma-separated list.
+gpu_opts=(
+  "amd     Radeon: Mesa + amdgpu early KMS + overclocking + LACT"
+  "nvidia  GeForce: proprietary driver with NVIDIA's open kernel modules (Turing or newer)"
+  "intel   Intel graphics: Mesa + media drivers + OpenCL"
+)
+cpu_opts=(
+  "amd     Ryzen / Threadripper microcode"
+  "intel   Core / Xeon microcode (thermald on laptops)"
+)
+opt_for() { local k="$1"; shift; for o in "$@"; do [ "${o%% *}" = "$k" ] && { printf '%s\n' "$o"; return; }; done; }
+
+box "nixosconf setup" \
+  "Account   $USER_NAME ($FULL_NAME)" \
+  "Config    $DIR  (branch $BRANCH)" \
+  "Detected  GPU: $GPU   CPU: $CPU   laptop: $([ "$LAPTOP" = 1 ] && echo yes || echo no)"
+
+if [ "$HAVE_TTY" = 1 ] && [ "$NO_UI" != 1 ]; then
+  pick="$(choose "Graphics card (on a hybrid laptop pick the GPU that drives the screen)" \
+                 "$(opt_for "$GPU" "${gpu_opts[@]}")" "${gpu_opts[@]}")"
+  GPU="${pick%% *}"
+  pick="$(choose "Processor" "$(opt_for "$CPU" "${cpu_opts[@]}")" "${cpu_opts[@]}")"
+  CPU="${pick%% *}"
+  if confirm "Is this a laptop? (power profiles, lid switch, Wi-Fi power saving)" "$([ "$LAPTOP" = 1 ] && echo yes || echo no)"; then
+    LAPTOP=1
+  else
+    LAPTOP=0
+  fi
+  box "Ready to install" \
+    "GPU       $GPU" \
+    "CPU       $CPU" \
+    "Laptop    $([ "$LAPTOP" = 1 ] && echo yes || echo no)" \
+    "" \
+    "Next: clone the config, generate the hardware files, build and" \
+    "switch (downloads several GB), install the Flatpaks, reboot."
+  confirm "Start now?" yes || { say "Nothing changed."; exit 0; }
+else
+  say "No terminal for the setup UI; using GPU=$GPU CPU=$CPU laptop=$LAPTOP (override with NIXOSCONF_GPU/CPU/LAPTOP)"
+fi
+
+# ---------------------------------------------------------------------------
 # 1. Clone or update the repo, as the user
 
 fresh=0
@@ -143,6 +310,15 @@ write_as_user "$DIR/user.nix" <<NIX
 }
 NIX
 
+say "Writing hardware.json (gpu=$GPU cpu=$CPU laptop=$LAPTOP)"
+write_as_user "$DIR/hardware.json" <<JSON
+{
+  "cpu": "$CPU",
+  "gpu": "$GPU",
+  "laptop": $([ "$LAPTOP" = 1 ] && echo true || echo false)
+}
+JSON
+
 # ---------------------------------------------------------------------------
 # 3. hardware-configuration.nix and drives.nix for this machine
 
@@ -157,14 +333,22 @@ find_drive() {
     uuid="$(grep -A1 "\"/mnt/$label\"" "$DIR/drives.nix" | grep -o 'by-uuid/[0-9A-Fa-f-]*' | cut -d/ -f2 || true)"
     [ -n "$uuid" ] && dev="$(blkid -U "$uuid" 2>/dev/null || true)"
   fi
-  if [ -z "$dev" ] && { : </dev/tty; } 2>/dev/null; then
-    {
-      echo
-      echo "Could not find the drive for /mnt/$label. Partitions on this machine:"
-      lsblk -o NAME,SIZE,FSTYPE,LABEL,UUID,MOUNTPOINT 2>/dev/null || true
-      echo
-    } >/dev/tty
-    read -r -p "Device for /mnt/$label (e.g. /dev/sdb1, blank to skip): " dev </dev/tty
+  if [ -z "$dev" ] && [ "$HAVE_TTY" = 1 ] && [ "$NO_UI" != 1 ]; then
+    local parts=() line skip="skip: no /mnt/$label on this machine"
+    while IFS= read -r line; do parts+=("$line"); done \
+      < <(lsblk -rpno NAME,SIZE,FSTYPE,LABEL,MOUNTPOINT 2>/dev/null | awk -F'[ ]' '$3 != "" && $3 != "swap"' || true)
+    if [ -n "$GUM" ] && [ "${#parts[@]}" -gt 0 ]; then
+      line="$(choose "Which partition is /mnt/$label?" "$skip" "${parts[@]}" "$skip")"
+      [ "$line" = "$skip" ] && dev="" || dev="${line%% *}"
+    else
+      {
+        echo
+        echo "Could not find the drive for /mnt/$label. Partitions on this machine:"
+        lsblk -o NAME,SIZE,FSTYPE,LABEL,UUID,MOUNTPOINT 2>/dev/null || true
+        echo
+      } >/dev/tty
+      read -r -p "Device for /mnt/$label (e.g. /dev/sdb1, blank to skip): " dev </dev/tty
+    fi
   fi
   [ -n "$dev" ] || return 0
   uuid="$(blkid -s UUID -o value "$dev" 2>/dev/null || true)"
@@ -281,18 +465,22 @@ fi
 # 7. Reboot
 
 say "Done."
-cat <<MSG
-
-  Config:    $DIR  (branch $BRANCH), reachable as $LINK
-  Update:    nixos-updater     (or the NixOS Updater app in the start menu)
-  Rebuild:   sudo nixos-rebuild switch --flake $LINK
-
-MSG
+box "All set" \
+  "Config    $DIR  (branch $BRANCH), reachable as $LINK" \
+  "Hardware  GPU: $GPU   CPU: $CPU   laptop: $([ "$LAPTOP" = 1 ] && echo yes || echo no)" \
+  "Update    nixos-updater, or the NixOS Updater app in the start menu" \
+  "Rebuild   sudo nixos-rebuild switch --flake $LINK"
 
 if [ "${NIXOSCONF_NO_REBOOT:-0}" = 1 ]; then
   say "Reboot to finish (new kernel, scheduler and drivers)."
 elif [ "$DRY_RUN" = 1 ]; then
   run reboot
+elif [ -n "$GUM" ]; then
+  if confirm "Reboot now into the new system? (new kernel, scheduler and drivers)" yes; then
+    reboot
+  else
+    say "Reboot when you are ready."
+  fi
 else
   say "Rebooting in 15 seconds into the new system (Ctrl-C to stay)."
   sleep 15
