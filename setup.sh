@@ -22,6 +22,8 @@
 #   NIXOSCONF_IGPU_BUSID, NIXOSCONF_NVIDIA_BUSID   hybrid: PCI:bus:device:function
 #   NIXOSCONF_CPU               amd | intel                (default: detected, then asked)
 #   NIXOSCONF_LAPTOP            1 | 0                      (default: detected, then asked)
+#   NIXOSCONF_DRIVES            1 | 0   mount the GD1/GD2 data drives   (default: detected, then asked)
+#   NIXOSCONF_HOME_LINKS        1 | 0   link Documents, Downloads, ... and .ssh into /mnt/GD2/Backup
 #   NIXOSCONF_NO_UI=1           take the detected/overridden hardware without asking
 #   NIXOSCONF_REGEN_HARDWARE=1  rewrite hardware-configuration.nix and drives.nix
 #                               on an existing clone (always done on a fresh one)
@@ -272,6 +274,23 @@ case "$CPU" in amd|intel) ;; *) die "NIXOSCONF_CPU must be amd or intel (got '$C
 case "$IGPU" in amd|intel) ;; *) die "NIXOSCONF_IGPU must be intel or amd (got '$IGPU')" ;; esac
 case "$PRIME" in offload|sync) ;; *) die "NIXOSCONF_PRIME must be offload or sync (got '$PRIME')" ;; esac
 
+# Data drives: yes when a GD1/GD2 filesystem is visible or already mounted,
+# otherwise yes on desktops and no on laptops. Home links follow the drives.
+drives_visible() {
+  local l
+  for l in $DRIVES; do
+    findmnt -n "/mnt/$l" >/dev/null 2>&1 && return 0
+    [ -n "$(blkid -L "$l" 2>/dev/null)" ] && return 0
+  done
+  return 1
+}
+DATA_DRIVES="${NIXOSCONF_DRIVES:-$(read_hw dataDrives)}"
+case "$DATA_DRIVES" in true|1) DATA_DRIVES=1 ;; false|0) DATA_DRIVES=0 ;;
+  *) if drives_visible || [ "$LAPTOP" = 0 ]; then DATA_DRIVES=1; else DATA_DRIVES=0; fi ;; esac
+HOME_LINKS="${NIXOSCONF_HOME_LINKS:-$(read_hw homeLinks)}"
+case "$HOME_LINKS" in true|1) HOME_LINKS=1 ;; false|0) HOME_LINKS=0 ;; *) HOME_LINKS="$DATA_DRIVES" ;; esac
+yn() { if [ "$1" = 1 ]; then echo yes; else echo no; fi; }
+
 # One line describing the GPU choice, for the summary boxes.
 gpu_desc() {
   if [ "$GPU" = hybrid ]; then
@@ -316,7 +335,8 @@ ask_text() {
 box "nixosconf setup" \
   "Account   $USER_NAME ($FULL_NAME)" \
   "Config    $DIR  (branch $BRANCH)" \
-  "Detected  GPU: $(gpu_desc)   CPU: $CPU   laptop: $([ "$LAPTOP" = 1 ] && echo yes || echo no)"
+  "Detected  GPU: $(gpu_desc)   CPU: $CPU   laptop: $(yn "$LAPTOP")" \
+  "          data drives ($DRIVES): $(yn "$DATA_DRIVES")   home folder links: $(yn "$HOME_LINKS")"
 
 if [ "$HAVE_TTY" = 1 ] && [ "$NO_UI" != 1 ]; then
   pick="$(choose "Graphics" "$(opt_for "$GPU" "${gpu_opts[@]}")" "${gpu_opts[@]}")"
@@ -341,22 +361,37 @@ if [ "$HAVE_TTY" = 1 ] && [ "$NO_UI" != 1 ]; then
   fi
   pick="$(choose "Processor" "$(opt_for "$CPU" "${cpu_opts[@]}")" "${cpu_opts[@]}")"
   CPU="${pick%% *}"
-  if confirm "Is this a laptop? (power profiles, lid switch, Wi-Fi power saving)" "$([ "$LAPTOP" = 1 ] && echo yes || echo no)"; then
+  if confirm "Is this a laptop? (power profiles, lid switch, Wi-Fi power saving)" "$(yn "$LAPTOP")"; then
     LAPTOP=1
   else
     LAPTOP=0
   fi
+  if confirm "Mount the data drives $DRIVES at /mnt? (no: skip them entirely)" "$(yn "$DATA_DRIVES")"; then
+    DATA_DRIVES=1
+  else
+    DATA_DRIVES=0
+    HOME_LINKS=0
+  fi
+  if [ "$DATA_DRIVES" = 1 ]; then
+    if confirm "Replace Documents, Downloads, Music, Pictures, Videos and .ssh with links into /mnt/GD2/Backup (plus the book libraries)?" "$(yn "$HOME_LINKS")"; then
+      HOME_LINKS=1
+    else
+      HOME_LINKS=0
+    fi
+  fi
   box "Ready to install" \
     "GPU       $(gpu_desc)" \
     "CPU       $CPU" \
-    "Laptop    $([ "$LAPTOP" = 1 ] && echo yes || echo no)" \
+    "Laptop    $(yn "$LAPTOP")" \
+    "Drives    $(yn "$DATA_DRIVES")   home folder links: $(yn "$HOME_LINKS")" \
     "" \
     "Next: clone the config, generate the hardware files, build and" \
     "switch (downloads several GB), install the Flatpaks, reboot."
   confirm "Start now?" yes || { say "Nothing changed."; exit 0; }
 else
-  say "No terminal for the setup UI; using GPU=$(gpu_desc) CPU=$CPU laptop=$LAPTOP (override with NIXOSCONF_GPU/CPU/LAPTOP)"
+  say "No terminal for the setup UI; using GPU=$(gpu_desc) CPU=$CPU laptop=$LAPTOP drives=$DATA_DRIVES links=$HOME_LINKS (override with NIXOSCONF_GPU/CPU/LAPTOP/DRIVES/HOME_LINKS)"
 fi
+[ "$DATA_DRIVES" = 1 ] || HOME_LINKS=0
 if [ "$GPU" = hybrid ] && { [ -z "$IGPU_BUSID" ] || [ -z "$NVIDIA_BUSID" ]; }; then
   die "A hybrid GPU needs both PCI bus IDs. Set NIXOSCONF_IGPU_BUSID and NIXOSCONF_NVIDIA_BUSID (PCI:bus:device:function, from lspci) or pick a single GPU."
 fi
@@ -394,7 +429,8 @@ write_as_user "$DIR/user.nix" <<NIX
 }
 NIX
 
-say "Writing hardware.json (gpu=$(gpu_desc) cpu=$CPU laptop=$LAPTOP)"
+tf() { if [ "$1" = 1 ]; then echo true; else echo false; fi; }
+say "Writing hardware.json (gpu=$(gpu_desc) cpu=$CPU laptop=$LAPTOP drives=$DATA_DRIVES links=$HOME_LINKS)"
 if [ "$GPU" = hybrid ]; then
   write_as_user "$DIR/hardware.json" <<JSON
 {
@@ -406,7 +442,9 @@ if [ "$GPU" = hybrid ]; then
     "igpu": "$IGPU_BUSID",
     "nvidia": "$NVIDIA_BUSID"
   },
-  "laptop": $([ "$LAPTOP" = 1 ] && echo true || echo false)
+  "laptop": $(tf "$LAPTOP"),
+  "dataDrives": $(tf "$DATA_DRIVES"),
+  "homeLinks": $(tf "$HOME_LINKS")
 }
 JSON
 else
@@ -414,7 +452,9 @@ else
 {
   "cpu": "$CPU",
   "gpu": "$GPU",
-  "laptop": $([ "$LAPTOP" = 1 ] && echo true || echo false)
+  "laptop": $(tf "$LAPTOP"),
+  "dataDrives": $(tf "$DATA_DRIVES"),
+  "homeLinks": $(tf "$HOME_LINKS")
 }
 JSON
 fi
@@ -460,6 +500,17 @@ find_drive() {
   printf '%s %s\n' "$uuid" "$fstype"
 }
 
+write_drives_nix() { # entries on stdin
+  write_as_user "$DIR/drives.nix" <<NIX
+# Extra data drives. setup.sh regenerates this file after finding the drives
+# on the machine, so edit it by hand only if the detection got it wrong.
+# dataDrives = false in hardware.json turns the mounts off without editing.
+{ lib, ... }:
+lib.mkIf (({ dataDrives = true; } // builtins.fromJSON (builtins.readFile ./hardware.json)).dataDrives) {$(cat)
+}
+NIX
+}
+
 if [ "$fresh" = 1 ] || [ "${NIXOSCONF_REGEN_HARDWARE:-0}" = 1 ] || [ ! -f "$DIR/hardware-configuration.nix" ]; then
   say "Generating hardware-configuration.nix for this machine"
   if [ "$DRY_RUN" = 1 ]; then
@@ -467,7 +518,14 @@ if [ "$fresh" = 1 ] || [ "${NIXOSCONF_REGEN_HARDWARE:-0}" = 1 ] || [ ! -f "$DIR/
   else
     nixos-generate-config --show-hardware-config | write_as_user "$DIR/hardware-configuration.nix"
   fi
+else
+  say "Keeping the existing hardware-configuration.nix (NIXOSCONF_REGEN_HARDWARE=1 to redo)"
+fi
 
+if [ "$DATA_DRIVES" = 0 ]; then
+  say "Data drives turned off; writing an empty drives.nix"
+  write_drives_nix </dev/null
+elif [ "$fresh" = 1 ] || [ "${NIXOSCONF_REGEN_HARDWARE:-0}" = 1 ] || ! grep -q 'fileSystems\."/mnt/' "$DIR/drives.nix" 2>/dev/null; then
   say "Looking for the data drives ($DRIVES)"
   entries=""
   for label in $DRIVES; do
@@ -485,20 +543,14 @@ if [ "$fresh" = 1 ] || [ "${NIXOSCONF_REGEN_HARDWARE:-0}" = 1 ] || [ ! -f "$DIR/
     options = [ \"nofail\" ];
   };"
   done
-  write_as_user "$DIR/drives.nix" <<NIX
-# Extra data drives. setup.sh regenerates this file after finding the drives
-# on the machine, so edit it by hand only if the detection got it wrong.
-{ ... }:
-{$entries
-}
-NIX
+  printf '%s' "$entries" | write_drives_nix
 else
-  say "Keeping the existing hardware-configuration.nix and drives.nix (NIXOSCONF_REGEN_HARDWARE=1 to redo)"
+  say "Keeping the existing drives.nix (NIXOSCONF_REGEN_HARDWARE=1 to redo)"
 fi
 
 # Mount the data drives now rather than after the reboot, so the first build
 # can already link the home folders into /mnt/GD2/Backup.
-if [ -f "$DIR/drives.nix" ]; then
+if [ "$DATA_DRIVES" = 1 ] && [ -f "$DIR/drives.nix" ]; then
   while read -r mnt uuid; do
     [ -n "$mnt" ] && [ -n "$uuid" ] || continue
     if mountpoint -q "$mnt" 2>/dev/null; then
@@ -567,7 +619,8 @@ fi
 say "Done."
 box "All set" \
   "Config    $DIR  (branch $BRANCH), reachable as $LINK" \
-  "Hardware  GPU: $(gpu_desc)   CPU: $CPU   laptop: $([ "$LAPTOP" = 1 ] && echo yes || echo no)" \
+  "Hardware  GPU: $(gpu_desc)   CPU: $CPU   laptop: $(yn "$LAPTOP")" \
+  "Drives    $(yn "$DATA_DRIVES")   home folder links: $(yn "$HOME_LINKS")" \
   "Update    nixos-updater, or the NixOS Updater app in the start menu" \
   "Rebuild   sudo nixos-rebuild switch --flake $LINK"
 

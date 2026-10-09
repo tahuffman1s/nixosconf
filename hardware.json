@@ -1,5 +1,7 @@
 {
   "cpu": "amd",
   "gpu": "amd",
-  "laptop": false
+  "laptop": false,
+  "dataDrives": true,
+  "homeLinks": true
 }

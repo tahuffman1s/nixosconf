@@ -7,9 +7,12 @@ let
   #   busIds: { igpu = "PCI:0:2:0"; nvidia = "PCI:1:0:0"; }   (hybrid)
   #   cpu:    "amd" | "intel"
   #   laptop: true | false
+  #   dataDrives: true | false   mount GD1/GD2 (drives.nix)
+  #   homeLinks:  true | false   link the home folders into /mnt/GD2/Backup (Home/links.nix)
   hw = {
     cpu = "amd"; gpu = "amd"; igpu = "intel"; prime = "offload";
     busIds = { igpu = ""; nvidia = ""; }; laptop = false;
+    dataDrives = true; homeLinks = true;
   } // builtins.fromJSON (builtins.readFile ../hardware.json);
   isAmdGpu = hw.gpu == "amd";
   isHybrid = hw.gpu == "hybrid";

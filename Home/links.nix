@@ -1,5 +1,9 @@
 { config, lib, pkgs, ...}:
 let 
+  # setup.sh writes hardware.json; homeLinks = false keeps the home folders
+  # as plain directories (no data drive, or a laptop).
+  hw = { homeLinks = true; } // builtins.fromJSON (builtins.readFile ../hardware.json);
+
   backup = "/mnt/GD2/Backup";
 
   # Home entries that are replaced by symlinks into the backup drive.
@@ -20,7 +24,7 @@ let
   # The local folders that get removed before the links are created.
   replaced = [ "Documents" "Downloads" "Music" "Pictures" "Videos" ".ssh" ];
 in 
-{
+lib.mkIf hw.homeLinks {
   home.file = lib.mapAttrs (name: target: {
     source = config.lib.file.mkOutOfStoreSymlink "${backup}/${target}";
   }) links;

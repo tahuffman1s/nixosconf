@@ -18,8 +18,11 @@ fetched from nixpkgs) that asks three things, with what it detected already
 selected: the graphics card (Radeon, GeForce, Intel, or a hybrid laptop with
 an iGPU next to a GeForce), the processor, and whether the machine is a
 laptop. A hybrid also asks how to use the NVIDIA GPU (PRIME offload or sync)
-and confirms the two PCI bus IDs it found. Enter through the questions keeps
-the detected answers. Then it clones
+and confirms the two PCI bus IDs it found. It also asks whether to mount the
+GD1 and GD2 data drives at all, and whether to replace the home folders with
+links into `/mnt/GD2/Backup`; both default to yes on a desktop or when a
+drive with that label is visible, and to no on a laptop. Enter through the
+questions keeps the detected answers. Then it clones
 this repo into `~/nixosconf` (owned by you), points `/etc/nixos` at it, writes
 `user.nix` with your account name and `hardware.json` with those answers,
 generates `hardware-configuration.nix`, finds the GD1 and GD2 drives for
@@ -37,6 +40,8 @@ hardware without asking; `NIXOSCONF_GPU=amd|nvidia|intel|hybrid`,
 `NIXOSCONF_CPU=amd|intel`, `NIXOSCONF_LAPTOP=1|0`, and for a hybrid
 `NIXOSCONF_IGPU=intel|amd`, `NIXOSCONF_PRIME=offload|sync`,
 `NIXOSCONF_IGPU_BUSID` and `NIXOSCONF_NVIDIA_BUSID` override detection.
+`NIXOSCONF_DRIVES=1|0` and `NIXOSCONF_HOME_LINKS=1|0` decide the data drives
+and the home folder links.
 
 ### Hardware profiles
 
@@ -49,6 +54,8 @@ hardware without asking; `NIXOSCONF_GPU=amd|nvidia|intel|hybrid`,
 | GPU `intel` | Mesa, i915 in the initrd, intel-media-driver and intel-vaapi-driver (VA-API), OpenCL runtime, oneVPL, intel-gpu-tools |
 | GPU `hybrid` | An Intel or AMD iGPU (`igpu`) driving the screen plus a GeForce through NVIDIA PRIME, with the same NVIDIA driver setup as above and the iGPU's own drivers. `prime: offload` (default) leaves the NVIDIA GPU powered off until a program uses it: Steam and everything it launches always run on it, anything else with `nvidia-offload <command>`; fine-grained power management turns the card off in between. `prime: sync` makes the NVIDIA GPU render everything, for a laptop that mostly lives on the charger. Both need the PCI bus IDs in `busIds`, which setup.sh reads from `/sys/bus/pci` (`lspci` shows them as `01:00.0`, written `PCI:1:0:0`). |
 | CPU `amd` / `intel` | The matching microcode updates |
+| `dataDrives` | `false` writes an empty `drives.nix` and disables the mounts; nothing under `/mnt` is touched |
+| `homeLinks` | `false` leaves Documents, Downloads, Music, Pictures, Videos, `.ssh` and the book libraries as ordinary folders; `true` needs the GD2 drive |
 | Laptop | power-profiles-daemon (Plasma's battery widget), thermald on Intel, Wi-Fi power saving, lid closes to suspend, power key suspends (long press powers off), rotation sensors, brightnessctl and powertop, zram swappiness back to 60, NVIDIA runtime power management when the GPU is NVIDIA |
 
 To change it later, edit `hardware.json` and run Apply in the updater, or
@@ -108,7 +115,7 @@ Terminal equivalents: `nixos-updater unit add|remove|list`,
 | `flake.nix` | Inputs and the `nixos` system definition |
 | `user.nix` | The account the config is built for (written by setup.sh) |
 | `drives.nix` | GD1 and GD2 mounts (written by setup.sh) |
-| `hardware.json` | GPU (including hybrid iGPU + NVIDIA with PRIME mode and bus IDs), CPU and laptop choices for `Config/hardware-profile.nix` (written by setup.sh) |
+| `hardware.json` | GPU (including hybrid iGPU + NVIDIA with PRIME mode and bus IDs), CPU, laptop, data drive and home link choices, read by `Config/hardware-profile.nix`, `drives.nix` and `Home/links.nix` (written by setup.sh) |
 | `configuration.nix` | System module list |
 | `Config/` | Boot, hardware profile, gaming tuning, networking, locale, services, printing, users, nix settings |
 | `Apps/` | Per-app modules (Steam, kitty, fish, VSCodium, Zen, the updater app, ...) |
@@ -120,4 +127,5 @@ Terminal equivalents: `nixos-updater unit add|remove|list`,
 
 `Home/links.nix` replaces Documents, Downloads, Music, Pictures, Videos and
 `.ssh` with symlinks into `/mnt/GD2/Backup`, and links the book libraries from
-`/mnt/GD2/Backup/Books`. It only acts when that drive is mounted.
+`/mnt/GD2/Backup/Books`. It only acts when that drive is mounted, and not at
+all when `homeLinks` is false in `hardware.json`.
