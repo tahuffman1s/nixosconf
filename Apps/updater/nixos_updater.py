@@ -453,8 +453,14 @@ def fix_shebang(dest):
 
 
 def add_script(path, data=False, post_update=False, root=False):
-    """Copy a script or companion file into Home/scripts/; returns the entry."""
+    """Copy a script or companion file into Home/scripts/; returns the entry.
+    A systemd unit file is routed to the System Units list instead, since
+    NixOS installs units from the config, never from /etc/systemd/system."""
     path = Path(path)
+    if path.suffix in UNIT_SUFFIXES:
+        entry = add_unit(path, "system")
+        entry["unit"] = True
+        return entry
     SCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
     dest = SCRIPTS_DIR / path.name
     shutil.copyfile(path, dest)
@@ -784,11 +790,19 @@ def cli(args):
                 print(f'{s["file"]:32} {s["kind"]:7} {"on PATH" if s["script"] else "companion file":15} {", ".join(flags)}')
             return 0
         if args.script_command == "add":
+            units_added = False
             for f in args.files:
                 entry = add_script(f, data=args.data, post_update=args.post_update, root=args.root)
+                if entry.get("unit"):
+                    units_added = True
+                    print(f'{entry["file"]} is a systemd unit: added to System Units (wanted by '
+                          f'{", ".join(entry["wantedBy"]) or "nothing"}) instead of the scripts')
+                    continue
                 print(f'Added {entry["file"]} ({entry["kind"]}{", on PATH after apply" if entry["script"] else ""}'
                       f'{", runs after update" if entry["postUpdate"] else ""}{", as root" if entry["root"] else ""})')
             commit_scripts(echo)
+            if units_added:
+                commit_units(echo)
             return 0
         if args.script_command in ("post-update", "root"):
             flag = "postUpdate" if args.script_command == "post-update" else "root"
@@ -1383,14 +1397,25 @@ def gui(smoke_test=False):
                 set_script_flag(self.rows[item.row()]["file"], flags[item.column()], item.checkState() == Qt.CheckState.Checked)
 
         def add_files(self, paths, data=False):
+            units = []
             for path in paths:
                 try:
                     entry = add_script(path, data=data)
-                except OSError as e:
+                except (OSError, ValueError) as e:
                     QMessageBox.warning(self, "Add script", str(e))
+                    continue
+                if entry.get("unit"):
+                    units.append(entry["file"])
+                    self.log(f'{entry["file"]} is a systemd unit, so it went to System Units '
+                             f'(wanted by {", ".join(entry["wantedBy"]) or "nothing"}). NixOS installs units from the '
+                             f'config; a script cannot copy them into /etc/systemd/system.')
                     continue
                 self.log(f'Added {entry["file"]} ({entry["kind"]}{", on PATH after Apply" if entry["script"] else ""})')
             self.refresh()
+            if units:
+                self.window.refresh_pages()
+                QMessageBox.information(self, "Unit files", "Added to System Units: " + ", ".join(units) +
+                                        "\n\nSave there and Apply to install them. Remove the copy step from your script.")
 
         def add_dialog(self, data):
             paths, _ = QFileDialog.getOpenFileNames(self, "Add companion files" if data else "Add scripts", str(Path.home()),
@@ -1679,6 +1704,11 @@ def gui(smoke_test=False):
                 if self.banner.isVisible():
                     self.log("A reboot is needed for the new kernel to take effect.")
             else:
+                recent = self.log_view.toPlainText()[-4000:]
+                if "Read-only file system" in recent or "/etc/systemd/system" in recent:
+                    self.log("\nHint: on NixOS /etc (including /etc/systemd/system) is generated from the config and "
+                             "read-only. Put the unit file on the System Units page instead; the rebuild installs it. "
+                             "Files for /usr/local/bin belong on the Scripts page, which puts them on PATH.")
                 self.log("\nStopped. Fix the problem above and try again.")
 
         # -- actions
