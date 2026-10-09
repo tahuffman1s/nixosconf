@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """NixOS Updater: update this machine from its flake and keep the parts of the
-config that describe this machine (Flatpaks, autostart, shortcuts, service
-toggles, unattended updates) in sync, committing every change to the repo.
+config that describe this machine (Flatpaks, autostart, shortcuts, systemd
+units, scripts, unattended updates) in sync, committing every change.
 
 GUI by default (Qt, follows the Plasma style). Subcommands for the terminal:
 
@@ -11,8 +11,8 @@ GUI by default (Qt, follows the Plasma style). Subcommands for the terminal:
     nixos-updater flush                remove old generations and unused flatpaks
     nixos-updater push                 git push the config repo
     nixos-updater reboot
-    nixos-updater unit add FILE [--user] [--disabled]
-    nixos-updater unit remove NAME | list
+    nixos-updater unit add FILE [--user] [--disabled] | remove NAME | list
+    nixos-updater script add FILE... [--data] | remove NAME | run NAME | list
 """
 
 import argparse
@@ -21,8 +21,10 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 APP_NAME = "NixOS Updater"
@@ -37,6 +39,7 @@ FILES = {
     "autostart": CONFIG_DIR / "Home" / "autostart.json",
     "shortcuts": CONFIG_DIR / "Home" / "shortcuts.json",
     "units": CONFIG_DIR / "Config" / "units.json",
+    "scripts": CONFIG_DIR / "Home" / "scripts.json",
     "autoupdate": CONFIG_DIR / "Config" / "autoupdate.json",
 }
 DEFAULTS = {
@@ -44,15 +47,18 @@ DEFAULTS = {
     "autostart": [],
     "shortcuts": [],
     "units": [],
+    "scripts": [],
     "autoupdate": {"enabled": False, "schedule": "Sun 04:00", "mode": "boot", "reboot": False, "flatpaks": True},
 }
-
 UNITS_DIR = CONFIG_DIR / "Config" / "units"
+SCRIPTS_DIR = CONFIG_DIR / "Home" / "scripts"
 UNIT_SUFFIXES = (".service", ".timer", ".socket", ".path", ".target", ".mount", ".automount")
+SCRIPT_SUFFIXES = (".sh", ".bash", ".py")
 
 # Keys under [Context] in a flatpak override file hold ';'-separated lists.
 LIST_KEYS = {"shared", "sockets", "devices", "features", "filesystems", "persistent"}
 SCHEDULES = [
+    ("Every hour", "hourly"),
     ("Daily at 04:00", "*-*-* 04:00"),
     ("Weekly, Sunday 04:00", "Sun 04:00"),
     ("Monthly, the 1st at 04:00", "*-*-01 04:00"),
@@ -60,7 +66,7 @@ SCHEDULES = [
 
 
 # ---------------------------------------------------------------------------
-# Config files
+# Config files and git
 
 
 def load_json(name):
@@ -88,12 +94,12 @@ def save_json(name, data):
 
 
 def git_commit(paths, message):
-    """Commit the given files in the config repo; returns a one-line result."""
+    """Commit the given files or directories in the config repo; one-line result."""
     git = shutil.which("git")
     if not git:
         return "git not available; change left uncommitted"
     rel = [str(Path(p).relative_to(CONFIG_DIR)) for p in paths]
-    subprocess.run([git, "add", "--"] + rel, cwd=CONFIG_DIR, check=False)
+    subprocess.run([git, "add", "-A", "--"] + rel, cwd=CONFIG_DIR, check=False)
     staged = subprocess.run([git, "diff", "--cached", "--quiet", "--"] + rel, cwd=CONFIG_DIR, check=False)
     if staged.returncode == 0:
         return "nothing to commit"
@@ -104,10 +110,11 @@ def git_commit(paths, message):
     return f"committed: {message}"
 
 
-def save_and_commit(name, data, message, log):
-    if save_json(name, data):
-        log(f"Wrote {FILES[name]}")
-        log(git_commit([FILES[name]], message))
+def save_and_commit(name, data, message, log, extra_paths=()):
+    changed = save_json(name, data)
+    result = git_commit([FILES[name], *extra_paths], message)
+    if changed or not result.startswith("nothing"):
+        log(result)
         return True
     log("No changes.")
     return False
@@ -119,6 +126,15 @@ def run_capture(argv, cwd=None):
         return subprocess.run(argv, cwd=cwd, capture_output=True, text=True, check=False).stdout
     except FileNotFoundError:
         return ""
+
+
+def config_user():
+    """Account name from user.nix (what the config is built for)."""
+    try:
+        m = re.search(r'name\s*=\s*"([^"]+)"', (CONFIG_DIR / "user.nix").read_text())
+        return m.group(1) if m else os.environ.get("USER", "")
+    except OSError:
+        return os.environ.get("USER", "")
 
 
 # ---------------------------------------------------------------------------
@@ -319,11 +335,6 @@ def unit_wanted_by(path):
     return parser["Install"].get("WantedBy", "").split()
 
 
-def guess_unit_scope(wanted_by):
-    user_targets = {"default.target", "graphical-session.target", "basic.target"}
-    return "user" if wanted_by and all(t in user_targets or t == "timers.target" for t in wanted_by) and "default.target" in wanted_by else "system"
-
-
 def add_unit(path, scope, enabled=True):
     """Copy a unit file into the repo and record it; returns the entry."""
     path = Path(path)
@@ -361,6 +372,101 @@ def unit_status(entry):
     argv = ["systemctl"] + (["--user"] if entry["scope"] == "user" else []) + ["is-active", entry["file"]]
     out = run_capture(argv).strip()
     return out or "not loaded"
+
+
+def make_timer(name, command, schedule, scope, description=""):
+    """Write a <name>.service / <name>.timer pair into the repo and record them."""
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip("-") or "task"
+    description = description or name
+    service = (
+        f"[Unit]\nDescription={description}\n\n"
+        f"[Service]\nType=oneshot\nExecStart={command}\n"
+    )
+    timer = (
+        f"[Unit]\nDescription=Run {description} on a schedule\n\n"
+        f"[Timer]\nOnCalendar={schedule}\nPersistent=true\n\n"
+        f"[Install]\nWantedBy=timers.target\n"
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        s, t = Path(tmp) / f"{slug}.service", Path(tmp) / f"{slug}.timer"
+        s.write_text(service)
+        t.write_text(timer)
+        add_unit(s, scope, enabled=True)
+        return add_unit(t, scope, enabled=True)
+
+
+# ---------------------------------------------------------------------------
+# Scripts
+
+
+def script_kind(path):
+    """"python", "bash", "script" (other executable text) or "file"."""
+    path = Path(path)
+    if path.suffix == ".py":
+        return "python"
+    if path.suffix in (".sh", ".bash"):
+        return "bash"
+    try:
+        with open(path, "rb") as f:
+            head = f.read(64)
+    except OSError:
+        return "file"
+    if head.startswith(b"#!"):
+        if b"python" in head:
+            return "python"
+        if b"bash" in head or b"/sh" in head:
+            return "bash"
+        return "script"
+    return "file"
+
+
+def add_script(path, data=False):
+    """Copy a script or companion file into Home/scripts/; returns the entry."""
+    path = Path(path)
+    SCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
+    dest = SCRIPTS_DIR / path.name
+    shutil.copyfile(path, dest)
+    kind = "file" if data else script_kind(path)
+    is_script = kind != "file"
+    mode = dest.stat().st_mode
+    dest.chmod((mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH) if is_script else (mode & ~0o111))
+    entry = {"file": path.name, "script": is_script, "kind": kind}
+    scripts = [s for s in load_json("scripts") if s["file"] != path.name] + [entry]
+    scripts.sort(key=lambda s: s["file"])
+    save_json("scripts", scripts)
+    return entry
+
+
+def remove_script(name):
+    scripts = load_json("scripts")
+    keep = [s for s in scripts if s["file"] != name]
+    if len(keep) == len(scripts):
+        return False
+    save_json("scripts", keep)
+    try:
+        (SCRIPTS_DIR / name).unlink()
+    except OSError:
+        pass
+    return True
+
+
+def commit_scripts(log):
+    log(git_commit([FILES["scripts"], SCRIPTS_DIR], "Scripts: update scripts and files"))
+
+
+def script_run_cmd(entry):
+    """Command to run a script from the repo copy (works before Apply too)."""
+    path = SCRIPTS_DIR / entry["file"]
+    if entry.get("kind") == "python":
+        return ["python3", str(path)]
+    if entry.get("kind") == "bash":
+        return ["bash", str(path)]
+    return [str(path)]
+
+
+def installed_script_path(name, scope):
+    """Where the script lives after Apply, for use in units."""
+    return f"%h/.local/bin/{name}" if scope == "user" else f"/home/{config_user()}/.local/bin/{name}"
 
 
 # ---------------------------------------------------------------------------
@@ -446,6 +552,11 @@ def system_info():
     return version, gen
 
 
+def unpushed_commits():
+    out = run_capture(["git", "rev-list", "--count", "@{upstream}..HEAD"], cwd=CONFIG_DIR).strip()
+    return int(out) if out.isdigit() else 0
+
+
 # ---------------------------------------------------------------------------
 # CLI
 
@@ -500,6 +611,29 @@ def cli(args):
             commit_units(echo)
             print("Run `nixos-updater apply` to remove it from the system.")
             return 0
+    if args.command == "script":
+        if args.script_command == "list":
+            for s in load_json("scripts"):
+                print(f'{s["file"]:32} {s["kind"]:7} {"on PATH" if s["script"] else "companion file"}')
+            return 0
+        if args.script_command == "add":
+            for f in args.files:
+                entry = add_script(f, data=args.data)
+                print(f'Added {entry["file"]} ({entry["kind"]}{", on PATH after apply" if entry["script"] else ""})')
+            commit_scripts(echo)
+            return 0
+        if args.script_command == "remove":
+            if not remove_script(args.name):
+                print(f"{args.name} is not in the config", file=sys.stderr)
+                return 1
+            commit_scripts(echo)
+            return 0
+        if args.script_command == "run":
+            entry = next((s for s in load_json("scripts") if s["file"] == args.name), None)
+            if not entry:
+                print(f"{args.name} is not in the config", file=sys.stderr)
+                return 1
+            return subprocess.run(script_run_cmd(entry), check=False).returncode
     return 0
 
 
@@ -508,13 +642,14 @@ def cli(args):
 
 
 def gui(smoke_test=False):
-    from PyQt6.QtCore import QProcess, Qt, QTimer
-    from PyQt6.QtGui import QFontDatabase, QIcon, QKeySequence
+    from PyQt6.QtCore import QProcess, QSize, Qt, QTimer
+    from PyQt6.QtGui import QDesktopServices, QFontDatabase, QIcon, QKeySequence
+    from PyQt6.QtCore import QUrl
     from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
-                                 QFormLayout, QFrame, QGroupBox, QHBoxLayout, QKeySequenceEdit, QLabel, QLineEdit,
-                                 QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar,
-                                 QPushButton, QSizePolicy, QTableWidget, QTableWidgetItem, QTabWidget, QToolButton,
-                                 QVBoxLayout, QWidget)
+                                 QFileDialog, QFormLayout, QFrame, QGridLayout, QHBoxLayout, QKeySequenceEdit, QLabel,
+                                 QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QPlainTextEdit,
+                                 QProgressBar, QPushButton, QSizePolicy, QSplitter, QStackedWidget, QTableWidget,
+                                 QTableWidgetItem, QToolButton, QVBoxLayout, QWidget)
 
     def icon(*names):
         for name in names:
@@ -523,11 +658,91 @@ def gui(smoke_test=False):
                 return ic
         return QIcon()
 
-    def hint(text):
+    def muted(text):
         label = QLabel(text)
         label.setWordWrap(True)
-        label.setStyleSheet("opacity: 0.75")
+        label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        f = label.font()
+        f.setPointSize(max(f.pointSize() - 1, 8))
+        label.setFont(f)
+        label.setStyleSheet("color: palette(placeholder-text);")
         return label
+
+    def page_header(title, subtitle):
+        box = QVBoxLayout()
+        box.setSpacing(2)
+        t = QLabel(title)
+        f = t.font()
+        f.setPointSize(f.pointSize() + 4)
+        f.setBold(True)
+        t.setFont(f)
+        box.addWidget(t)
+        box.addWidget(muted(subtitle))
+        return box
+
+    def button(text, icon_names, slot, primary=False):
+        b = QPushButton(icon(*icon_names), text)
+        b.clicked.connect(slot)
+        if primary:
+            b.setDefault(True)
+        return b
+
+    def table(headers):
+        t = QTableWidget(0, len(headers))
+        t.setHorizontalHeaderLabels(headers)
+        t.horizontalHeader().setStretchLastSection(True)
+        t.verticalHeader().setVisible(False)
+        t.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        t.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        t.setAlternatingRowColors(True)
+        t.setShowGrid(False)
+        return t
+
+    def selected_rows(t):
+        return sorted({i.row() for i in t.selectedIndexes()}, reverse=True)
+
+    class DropTable(QTableWidget):
+        """A table that accepts files with given suffixes dropped from the file manager."""
+
+        def __init__(self, headers, suffixes, on_files, placeholder):
+            super().__init__(0, len(headers))
+            self.setHorizontalHeaderLabels(headers)
+            self.horizontalHeader().setStretchLastSection(True)
+            self.verticalHeader().setVisible(False)
+            self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+            self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+            self.setAlternatingRowColors(True)
+            self.setShowGrid(False)
+            self.suffixes = suffixes
+            self.on_files = on_files
+            self.placeholder = placeholder
+            self.setAcceptDrops(True)
+
+        def accepts(self, event):
+            return any(u.isLocalFile() and (not self.suffixes or u.toLocalFile().endswith(self.suffixes))
+                       for u in event.mimeData().urls())
+
+        def dragEnterEvent(self, event):  # noqa: N802 - Qt API
+            if self.accepts(event):
+                event.acceptProposedAction()
+
+        def dragMoveEvent(self, event):  # noqa: N802 - Qt API
+            event.acceptProposedAction()
+
+        def dropEvent(self, event):  # noqa: N802 - Qt API
+            paths = [u.toLocalFile() for u in event.mimeData().urls()
+                     if u.isLocalFile() and (not self.suffixes or u.toLocalFile().endswith(self.suffixes))]
+            if paths:
+                event.acceptProposedAction()
+                self.on_files(paths)
+
+        def paintEvent(self, event):  # noqa: N802 - Qt API
+            super().paintEvent(event)
+            if self.rowCount() == 0:
+                from PyQt6.QtGui import QPainter
+                p = QPainter(self.viewport())
+                p.setPen(self.palette().placeholderText().color())
+                p.drawText(self.viewport().rect(), Qt.AlignmentFlag.AlignCenter, self.placeholder)
 
     # -- dialogs
 
@@ -542,8 +757,7 @@ def gui(smoke_test=False):
             self.filter.setClearButtonEnabled(True)
             layout.addWidget(self.filter)
             self.list = QListWidget()
-            self.apps = available_apps()
-            for app in self.apps:
+            for app in available_apps():
                 item = QListWidgetItem(icon(app["icon"], "application-x-executable"), app["name"])
                 item.setData(Qt.ItemDataRole.UserRole, app)
                 item.setToolTip(app["exec"])
@@ -572,7 +786,7 @@ def gui(smoke_test=False):
         def __init__(self, parent, title, with_shortcut):
             super().__init__(parent)
             self.setWindowTitle(title)
-            self.resize(420, 0)
+            self.resize(440, 0)
             form = QFormLayout(self)
             self.name = QLineEdit()
             self.command = QLineEdit()
@@ -587,41 +801,192 @@ def gui(smoke_test=False):
             buttons.rejected.connect(self.reject)
             form.addRow(buttons)
 
-    # -- editor tabs
+    class TimerDialog(QDialog):
+        """Create a service + timer pair."""
 
-    class AutostartTab(QWidget):
+        def __init__(self, parent, scope):
+            super().__init__(parent)
+            self.scope = scope
+            self.setWindowTitle("New timer")
+            self.resize(480, 0)
+            form = QFormLayout(self)
+            self.name = QLineEdit()
+            self.name.setPlaceholderText("e.g. nightly-backup")
+            form.addRow("Name", self.name)
+            self.command = QLineEdit()
+            self.command.setPlaceholderText("Command to run, with an absolute path")
+            form.addRow("Command", self.command)
+            scripts = [s for s in load_json("scripts") if s["script"]]
+            if scripts:
+                self.script = QComboBox()
+                self.script.addItem("Pick a script from the Scripts page…", "")
+                for s in scripts:
+                    self.script.addItem(s["file"], installed_script_path(s["file"], scope))
+                self.script.currentIndexChanged.connect(
+                    lambda i: self.command.setText(self.script.currentData()) if self.script.currentData() else None)
+                form.addRow("Script", self.script)
+            self.schedule = QComboBox()
+            for label, _ in SCHEDULES:
+                self.schedule.addItem(label)
+            self.schedule.addItem("Custom (systemd OnCalendar)")
+            self.custom = QLineEdit()
+            self.custom.setPlaceholderText("e.g. Mon..Fri 18:00")
+            self.custom.setEnabled(False)
+            self.schedule.currentIndexChanged.connect(lambda i: self.custom.setEnabled(i == len(SCHEDULES)))
+            form.addRow("When", self.schedule)
+            form.addRow("Custom", self.custom)
+            buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+            buttons.accepted.connect(self.accept)
+            buttons.rejected.connect(self.reject)
+            form.addRow(buttons)
+
+        def values(self):
+            i = self.schedule.currentIndex()
+            schedule = SCHEDULES[i][1] if i < len(SCHEDULES) else self.custom.text().strip()
+            return self.name.text().strip(), self.command.text().strip(), schedule
+
+    # -- pages
+
+    class Page(QWidget):
+        """A settings page: header, body, action row. Subclasses fill body()."""
+
+        title = ""
+        subtitle = ""
+
         def __init__(self, window):
             super().__init__()
             self.window = window
-            self.entries = load_json("autostart")
-            layout = QVBoxLayout(self)
-            layout.addWidget(hint("Applications and commands started with your Plasma session. "
-                                  "Entries you add in Plasma's own Autostart settings are imported on the next sync."))
-            self.list = QListWidget()
-            self.list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-            layout.addWidget(self.list, 1)
+            self.layout_ = QVBoxLayout(self)
+            self.layout_.setContentsMargins(24, 20, 24, 16)
+            self.layout_.setSpacing(12)
+            self.layout_.addLayout(page_header(self.title, self.subtitle))
+            self.body()
+
+        def actions(self, *buttons, save=None):
             row = QHBoxLayout()
-            add_app = QPushButton(icon("list-add"), "Add application…")
-            add_app.clicked.connect(self.add_app)
-            add_cmd = QPushButton(icon("utilities-terminal"), "Add command…")
-            add_cmd.clicked.connect(self.add_cmd)
-            remove = QPushButton(icon("list-remove"), "Remove")
-            remove.clicked.connect(self.remove)
-            row.addWidget(add_app)
-            row.addWidget(add_cmd)
-            row.addWidget(remove)
+            for b in buttons:
+                row.addWidget(b)
             row.addStretch(1)
-            save = QPushButton(icon("document-save"), "Save")
-            save.clicked.connect(self.save)
-            row.addWidget(save)
-            layout.addLayout(row)
+            if save:
+                row.addWidget(button("Save", ["document-save"], save, primary=True))
+            self.layout_.addLayout(row)
+
+        def log(self, text):
+            self.window.log(text)
+
+    class OverviewPage(Page):
+        title = "Overview"
+        subtitle = "Everything here changes the config in the repo first; Apply or Update makes it real."
+
+        def body(self):
+            card = QFrame()
+            card.setFrameShape(QFrame.Shape.StyledPanel)
+            grid = QGridLayout(card)
+            version, gen = system_info()
+            self.facts = {}
+            rows = [
+                ("System", version),
+                ("Generation", gen),
+                ("Config", str(CONFIG_DIR)),
+                ("Flatpaks declared", str(len(load_json("flatpaks").get("packages", [])))),
+                ("Unpushed commits", str(unpushed_commits())),
+            ]
+            for r, (k, v) in enumerate(rows):
+                grid.addWidget(muted(k), r, 0)
+                lab = QLabel(v)
+                lab.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+                self.facts[k] = lab
+                grid.addWidget(lab, r, 1)
+            grid.setColumnStretch(1, 1)
+            self.layout_.addWidget(card)
+
+            grid = QGridLayout()
+            grid.setSpacing(12)
+            actions = [
+                ("Update", ["system-software-update", "update-none"], self.window.update,
+                 "Sync, refresh flake inputs, rebuild, update Flatpaks"),
+                ("Apply", ["dialog-ok-apply", "system-run"], self.window.apply,
+                 "Rebuild from the config as it is saved now"),
+                ("Sync", ["flatpak-discover", "view-refresh"], self.window.sync,
+                 "Record installed Flatpaks, permissions and autostart entries"),
+                ("Push", ["vcs-push", "cloud-upload", "go-up"], self.window.push, "Send commits to GitHub"),
+                ("Flush", ["edit-clear-history", "user-trash"], self.window.flush,
+                 "Remove old generations, boot entries, unused Flatpak runtimes"),
+                ("Reboot", ["system-reboot"], self.window.reboot, "Restart the machine"),
+            ]
+            self.window.buttons = []
+            for i, (text, icons, slot, tip) in enumerate(actions):
+                b = QToolButton()
+                b.setText(text)
+                b.setIcon(icon(*icons))
+                b.setIconSize(QSize(40, 40))
+                b.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
+                b.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+                b.setMinimumHeight(96)
+                b.setToolTip(tip)
+                b.clicked.connect(slot)
+                cell = QVBoxLayout()
+                cell.setSpacing(4)
+                cell.addWidget(b)
+                cell.addWidget(muted(tip))
+                grid.addLayout(cell, i // 3, i % 3)
+                self.window.buttons.append(b)
+            self.layout_.addLayout(grid)
+            self.layout_.addStretch(1)
+
+        def refresh(self):
+            version, gen = system_info()
+            self.facts["System"].setText(version)
+            self.facts["Generation"].setText(gen)
+            self.facts["Flatpaks declared"].setText(str(len(load_json("flatpaks").get("packages", []))))
+            self.facts["Unpushed commits"].setText(str(unpushed_commits()))
+
+    class FlatpaksPage(Page):
+        title = "Flatpaks"
+        subtitle = ("What the config declares. Install and remove apps with Bazaar, change permissions in Flatseal or "
+                    "Plasma's Flatpak settings, then Sync to record it; Update does this on its own.")
+
+        def body(self):
+            self.table = table(["Application", "Custom permissions"])
+            self.layout_.addWidget(self.table, 1)
+            self.actions(button("Sync now", ["view-refresh"], self.window.sync),
+                         button("Open Bazaar", ["io.github.kolunmi.Bazaar", "flatpak-discover"],
+                                lambda: subprocess.Popen(["bazaar"])))
             self.refresh()
 
         def refresh(self):
-            self.list.clear()
+            data = load_json("flatpaks")
+            self.table.setRowCount(0)
+            for app in data.get("packages", []):
+                r = self.table.rowCount()
+                self.table.insertRow(r)
+                self.table.setItem(r, 0, QTableWidgetItem(icon(app, "application-x-executable"), app))
+                ov = data.get("overrides", {}).get(app, {})
+                summary = ", ".join(f"{k}: {len(v)}" for k, v in ov.items()) if ov else ""
+                self.table.setItem(r, 1, QTableWidgetItem(summary))
+            self.table.resizeColumnToContents(0)
+
+    class AutostartPage(Page):
+        title = "Autostart"
+        subtitle = "Applications and commands started with your Plasma session."
+
+        def body(self):
+            self.entries = load_json("autostart")
+            self.table = table(["Name", "Command"])
+            self.layout_.addWidget(self.table, 1)
+            self.actions(button("Add application…", ["list-add"], self.add_app),
+                         button("Add command…", ["utilities-terminal"], self.add_cmd),
+                         button("Remove", ["list-remove"], self.remove), save=self.save)
+            self.refresh()
+
+        def refresh(self):
+            self.table.setRowCount(0)
             for e in self.entries:
-                item = QListWidgetItem(icon(e.get("icon", ""), "application-x-executable"), f'{e["name"]}  —  {e["exec"]}')
-                self.list.addItem(item)
+                r = self.table.rowCount()
+                self.table.insertRow(r)
+                self.table.setItem(r, 0, QTableWidgetItem(icon(e.get("icon", ""), "application-x-executable"), e["name"]))
+                self.table.setItem(r, 1, QTableWidgetItem(e["exec"]))
+            self.table.resizeColumnToContents(0)
 
         def add_entry(self, entry):
             self.entries = [e for e in self.entries if e["file"] != entry["file"]] + [entry]
@@ -629,54 +994,38 @@ def gui(smoke_test=False):
             self.refresh()
 
         def add_app(self):
-            dialog = PickAppDialog(self)
-            if dialog.exec() and dialog.chosen():
-                self.add_entry(dialog.chosen())
+            d = PickAppDialog(self)
+            if d.exec() and d.chosen():
+                self.add_entry(d.chosen())
 
         def add_cmd(self):
-            dialog = CommandDialog(self, "Add command to autostart", with_shortcut=False)
-            if dialog.exec() and dialog.name.text().strip() and dialog.command.text().strip():
-                name = dialog.name.text().strip()
+            d = CommandDialog(self, "Add command to autostart", with_shortcut=False)
+            if d.exec() and d.name.text().strip() and d.command.text().strip():
+                name = d.name.text().strip()
                 slug = re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip("-").lower() or "command"
-                self.add_entry({"file": f"{slug}.desktop", "name": name, "exec": dialog.command.text().strip(), "icon": "utilities-terminal"})
+                self.add_entry({"file": f"{slug}.desktop", "name": name, "exec": d.command.text().strip(),
+                                "icon": "utilities-terminal"})
 
         def remove(self):
-            rows = sorted({i.row() for i in self.list.selectedIndexes()}, reverse=True)
-            for r in rows:
+            for r in selected_rows(self.table):
                 del self.entries[r]
             self.refresh()
 
         def save(self):
-            self.window.log("\n==> Saving autostart entries")
-            if save_and_commit("autostart", self.entries, "Autostart: update entries", self.window.log):
+            self.log("\n==> Saving autostart entries")
+            if save_and_commit("autostart", self.entries, "Autostart: update entries", self.log):
                 self.window.needs_apply()
 
-    class ShortcutsTab(QWidget):
-        def __init__(self, window):
-            super().__init__()
-            self.window = window
+    class ShortcutsPage(Page):
+        title = "Shortcuts"
+        subtitle = "Global shortcuts that run a command. They take effect after the next rebuild and login."
+
+        def body(self):
             self.entries = load_json("shortcuts")
-            layout = QVBoxLayout(self)
-            layout.addWidget(hint("Global shortcuts that run a command. Applied through plasma-manager on the next rebuild; "
-                                  "they take effect after logging in again."))
-            self.table = QTableWidget(0, 3)
-            self.table.setHorizontalHeaderLabels(["Name", "Shortcut", "Command"])
-            self.table.horizontalHeader().setStretchLastSection(True)
-            self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-            self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-            layout.addWidget(self.table, 1)
-            row = QHBoxLayout()
-            add = QPushButton(icon("list-add"), "Add shortcut…")
-            add.clicked.connect(self.add)
-            remove = QPushButton(icon("list-remove"), "Remove")
-            remove.clicked.connect(self.remove)
-            row.addWidget(add)
-            row.addWidget(remove)
-            row.addStretch(1)
-            save = QPushButton(icon("document-save"), "Save")
-            save.clicked.connect(self.save)
-            row.addWidget(save)
-            layout.addLayout(row)
+            self.table = table(["Name", "Shortcut", "Command"])
+            self.layout_.addWidget(self.table, 1)
+            self.actions(button("Add shortcut…", ["list-add"], self.add),
+                         button("Remove", ["list-remove"], self.remove), save=self.save)
             self.refresh()
 
         def refresh(self):
@@ -689,11 +1038,11 @@ def gui(smoke_test=False):
             self.table.resizeColumnsToContents()
 
         def add(self):
-            dialog = CommandDialog(self, "Add shortcut", with_shortcut=True)
-            if not dialog.exec():
+            d = CommandDialog(self, "Add shortcut", with_shortcut=True)
+            if not d.exec():
                 return
-            name, command = dialog.name.text().strip(), dialog.command.text().strip()
-            key = dialog.key.keySequence().toString(QKeySequence.SequenceFormat.PortableText)
+            name, command = d.name.text().strip(), d.command.text().strip()
+            key = d.key.keySequence().toString(QKeySequence.SequenceFormat.PortableText)
             if not (name and command and key):
                 QMessageBox.warning(self, "Add shortcut", "Name, shortcut and command are all needed.")
                 return
@@ -703,173 +1052,212 @@ def gui(smoke_test=False):
             self.refresh()
 
         def remove(self):
-            rows = sorted({i.row() for i in self.table.selectedIndexes()}, reverse=True)
-            for r in rows:
+            for r in selected_rows(self.table):
                 del self.entries[r]
             self.refresh()
 
         def save(self):
-            self.window.log("\n==> Saving shortcuts")
-            if save_and_commit("shortcuts", self.entries, "Shortcuts: update custom command shortcuts", self.window.log):
+            self.log("\n==> Saving shortcuts")
+            if save_and_commit("shortcuts", self.entries, "Shortcuts: update custom command shortcuts", self.log):
                 self.window.needs_apply()
 
-    class DropTable(QTableWidget):
-        """A table that accepts unit files dropped from the file manager."""
+    class UnitsPage(Page):
+        scope = "system"
 
-        def __init__(self, on_files):
-            super().__init__(0, 4)
-            self.on_files = on_files
-            self.setAcceptDrops(True)
-
-        def dragEnterEvent(self, event):  # noqa: N802 - Qt API
-            if any(u.isLocalFile() and u.toLocalFile().endswith(UNIT_SUFFIXES) for u in event.mimeData().urls()):
-                event.acceptProposedAction()
-
-        def dragMoveEvent(self, event):  # noqa: N802 - Qt API
-            event.acceptProposedAction()
-
-        def dropEvent(self, event):  # noqa: N802 - Qt API
-            paths = [u.toLocalFile() for u in event.mimeData().urls() if u.isLocalFile() and u.toLocalFile().endswith(UNIT_SUFFIXES)]
-            if paths:
-                event.acceptProposedAction()
-                self.on_files(paths)
-
-    class UnitsTab(QWidget):
-        def __init__(self, window):
-            super().__init__()
-            self.window = window
-            self.units = load_json("units")
-            self.dirty = False
-            layout = QVBoxLayout(self)
-            layout.addWidget(hint("systemd units kept in the config. Drop .service or .timer files here (or use Add). "
-                                  "The file is copied into Config/units/ and installed on the next Apply; a unit is "
-                                  "started at boot when Enabled is ticked and its [Install] section names a target."))
-            self.table = DropTable(self.add_files)
-            self.table.setHorizontalHeaderLabels(["Unit", "Scope", "Enabled", "Status"])
-            self.table.horizontalHeader().setStretchLastSection(True)
-            self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-            self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        def body(self):
+            self.table = DropTable(["Unit", "Enabled", "Wanted by", "Status"], UNIT_SUFFIXES, self.add_files,
+                                   "Drop .service or .timer files here")
             self.table.itemChanged.connect(self.toggled)
-            layout.addWidget(self.table, 1)
-            row = QHBoxLayout()
-            add = QPushButton(icon("list-add"), "Add unit file…")
-            add.clicked.connect(self.add_dialog)
-            remove = QPushButton(icon("list-remove"), "Remove")
-            remove.clicked.connect(self.remove)
-            refresh = QPushButton(icon("view-refresh"), "Refresh status")
-            refresh.clicked.connect(self.refresh)
-            row.addWidget(add)
-            row.addWidget(remove)
-            row.addWidget(refresh)
-            row.addStretch(1)
-            save = QPushButton(icon("document-save"), "Save")
-            save.clicked.connect(self.save)
-            row.addWidget(save)
-            layout.addLayout(row)
+            self.layout_.addWidget(self.table, 1)
+            self.actions(button("Add unit file…", ["list-add"], self.add_dialog),
+                         button("New timer…", ["chronometer", "appointment-new"], self.new_timer),
+                         button("Remove", ["list-remove"], self.remove),
+                         button("Refresh status", ["view-refresh"], self.refresh), save=self.save)
             self.refresh()
 
+        def units(self):
+            return [u for u in load_json("units") if u["scope"] == self.scope]
+
         def refresh(self):
+            self.rows = self.units()
             self.table.blockSignals(True)
             self.table.setRowCount(0)
-            for u in self.units:
+            for u in self.rows:
                 r = self.table.rowCount()
                 self.table.insertRow(r)
-                self.table.setItem(r, 0, QTableWidgetItem(icon("system-run"), u["file"]))
-                self.table.setItem(r, 1, QTableWidgetItem(u["scope"]))
+                self.table.setItem(r, 0, QTableWidgetItem(icon("chronometer" if u["file"].endswith(".timer") else "system-run"), u["file"]))
                 enabled = QTableWidgetItem()
                 enabled.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
                 enabled.setCheckState(Qt.CheckState.Checked if u["enabled"] else Qt.CheckState.Unchecked)
-                self.table.setItem(r, 2, enabled)
+                self.table.setItem(r, 1, enabled)
+                self.table.setItem(r, 2, QTableWidgetItem(", ".join(u["wantedBy"]) or "—"))
                 self.table.setItem(r, 3, QTableWidgetItem(unit_status(u)))
             self.table.resizeColumnsToContents()
             self.table.blockSignals(False)
 
         def toggled(self, item):
-            if item.column() == 2 and item.row() < len(self.units):
-                self.units[item.row()]["enabled"] = item.checkState() == Qt.CheckState.Checked
-                self.dirty = True
+            if item.column() == 1 and item.row() < len(self.rows):
+                name = self.rows[item.row()]["file"]
+                units = load_json("units")
+                for u in units:
+                    if u["file"] == name:
+                        u["enabled"] = item.checkState() == Qt.CheckState.Checked
+                save_json("units", units)
 
         def add_files(self, paths):
             for path in paths:
-                wanted = unit_wanted_by(path)
-                suggested = guess_unit_scope(wanted)
-                box = QMessageBox(self)
-                box.setWindowTitle("Add unit")
-                box.setText(f"Install {os.path.basename(path)} as which kind of unit?\n\n"
-                            f"Wanted by: {', '.join(wanted) or 'nothing (will not start on its own)'}")
-                system = box.addButton("System", QMessageBox.ButtonRole.AcceptRole)
-                user = box.addButton("User", QMessageBox.ButtonRole.AcceptRole)
-                box.addButton(QMessageBox.StandardButton.Cancel)
-                box.setDefaultButton(user if suggested == "user" else system)
-                box.exec()
-                if box.clickedButton() is system:
-                    scope = "system"
-                elif box.clickedButton() is user:
-                    scope = "user"
-                else:
-                    continue
                 try:
-                    add_unit(path, scope)
+                    entry = add_unit(path, self.scope)
                 except (OSError, ValueError) as e:
                     QMessageBox.warning(self, "Add unit", str(e))
                     continue
-                self.window.log(f"Added {os.path.basename(path)} ({scope}) to Config/units/")
-            self.units = load_json("units")
-            self.dirty = True
+                self.log(f'Added {entry["file"]} ({self.scope} unit, wanted by {", ".join(entry["wantedBy"]) or "nothing"})')
             self.refresh()
 
         def add_dialog(self):
-            from PyQt6.QtWidgets import QFileDialog
             paths, _ = QFileDialog.getOpenFileNames(self, "Add systemd unit files", str(Path.home()),
                                                     "systemd units (*.service *.timer *.socket *.path *.target *.mount)")
             if paths:
                 self.add_files(paths)
 
+        def new_timer(self):
+            d = TimerDialog(self, self.scope)
+            if not d.exec():
+                return
+            name, command, schedule = d.values()
+            if not (name and command and schedule):
+                QMessageBox.warning(self, "New timer", "Name, command and schedule are all needed.")
+                return
+            entry = make_timer(name, command, schedule, self.scope)
+            self.log(f'Created {entry["file"]} and its service ({self.scope}), schedule: {schedule}')
+            self.refresh()
+
         def remove(self):
-            rows = sorted({i.row() for i in self.table.selectedIndexes()}, reverse=True)
-            for r in rows:
-                remove_unit(self.units[r]["file"])
-            self.units = load_json("units")
-            self.dirty = True
+            for r in selected_rows(self.table):
+                remove_unit(self.rows[r]["file"])
             self.refresh()
 
         def save(self):
-            save_json("units", self.units)
-            self.window.log("\n==> Saving systemd units")
-            commit_units(self.window.log)
-            self.dirty = False
+            self.log("\n==> Saving systemd units")
+            commit_units(self.log)
             self.window.needs_apply()
 
-    class AutoUpdateTab(QWidget):
-        def __init__(self, window):
-            super().__init__()
-            self.window = window
+    class SystemUnitsPage(UnitsPage):
+        title = "System Units"
+        subtitle = ("systemd units installed for the whole machine. Drop .service or .timer files, or create a "
+                    "timer. The file is kept in Config/units/ and starts at boot when Enabled is ticked.")
+        scope = "system"
+
+    class UserUnitsPage(UnitsPage):
+        title = "User Units"
+        subtitle = ("home-manager units that run inside your session as you. Timers here can use %h for your "
+                    "home directory. The file is kept in Config/units/.")
+        scope = "user"
+
+    class ScriptsPage(Page):
+        title = "Scripts"
+        subtitle = ("Bash or Python scripts and the files they need. Kept in Home/scripts/, installed to "
+                    "~/.local/share/nixos-scripts/, and scripts also go on your PATH via ~/.local/bin. A script finds "
+                    "its companion files in its own directory.")
+
+        def body(self):
+            self.table = DropTable(["File", "Kind", "On PATH"], (), self.add_files,
+                                   "Drop scripts and their files here")
+            self.layout_.addWidget(self.table, 1)
+            self.actions(button("Add script…", ["list-add"], lambda: self.add_dialog(False)),
+                         button("Add companion file…", ["document-new"], lambda: self.add_dialog(True)),
+                         button("Run", ["media-playback-start"], self.run),
+                         button("Edit", ["document-edit"], self.edit),
+                         button("Remove", ["list-remove"], self.remove), save=self.save)
+            self.refresh()
+
+        def refresh(self):
+            self.rows = load_json("scripts")
+            self.table.setRowCount(0)
+            for s in self.rows:
+                r = self.table.rowCount()
+                self.table.insertRow(r)
+                ic = {"python": "text-x-python", "bash": "text-x-script", "script": "text-x-script"}.get(s["kind"], "text-x-generic")
+                self.table.setItem(r, 0, QTableWidgetItem(icon(ic), s["file"]))
+                self.table.setItem(r, 1, QTableWidgetItem(s["kind"]))
+                self.table.setItem(r, 2, QTableWidgetItem("yes" if s["script"] else "companion file"))
+            self.table.resizeColumnsToContents()
+
+        def add_files(self, paths, data=False):
+            for path in paths:
+                try:
+                    entry = add_script(path, data=data)
+                except OSError as e:
+                    QMessageBox.warning(self, "Add script", str(e))
+                    continue
+                self.log(f'Added {entry["file"]} ({entry["kind"]}{", on PATH after Apply" if entry["script"] else ""})')
+            self.refresh()
+
+        def add_dialog(self, data):
+            paths, _ = QFileDialog.getOpenFileNames(self, "Add companion files" if data else "Add scripts", str(Path.home()),
+                                                    "All files (*)" if data else "Scripts (*.sh *.bash *.py);;All files (*)")
+            if paths:
+                self.add_files(paths, data=data)
+
+        def selected(self):
+            rows = selected_rows(self.table)
+            return self.rows[rows[-1]] if rows else None
+
+        def run(self):
+            s = self.selected()
+            if not s:
+                return
+            if not s["script"]:
+                QMessageBox.information(self, "Run", f'{s["file"]} is a companion file, not a script.')
+                return
+            self.window.run([(f'Running {s["file"]}', script_run_cmd(s))], f'{s["file"]} finished.')
+
+        def edit(self):
+            s = self.selected()
+            if s:
+                QDesktopServices.openUrl(QUrl.fromLocalFile(str(SCRIPTS_DIR / s["file"])))
+
+        def remove(self):
+            for r in selected_rows(self.table):
+                remove_script(self.rows[r]["file"])
+            self.refresh()
+
+        def save(self):
+            self.log("\n==> Saving scripts")
+            commit_scripts(self.log)
+            self.window.needs_apply()
+
+    class AutoUpdatePage(Page):
+        title = "Auto Updates"
+        subtitle = ("Unattended updates run by a systemd timer: refresh flake inputs, rebuild, update Flatpaks. "
+                    "Missed runs happen at the next boot.")
+
+        def body(self):
             self.data = load_json("autoupdate")
-            layout = QVBoxLayout(self)
-            layout.addWidget(hint("Unattended updates run by a systemd timer as root: refresh flake inputs, rebuild, "
-                                  "update Flatpaks. Missed runs happen at the next boot."))
-            box = QGroupBox("Schedule")
-            form = QFormLayout(box)
+            form = QFormLayout()
+            form.setHorizontalSpacing(16)
             self.enabled = QCheckBox("Enable automatic updates")
             self.enabled.setChecked(bool(self.data.get("enabled")))
             form.addRow(self.enabled)
             self.schedule = QComboBox()
-            for label, _ in SCHEDULES:
-                self.schedule.addItem(label)
+            presets = [s for _, s in SCHEDULES if s != "hourly"]
+            for label, s in SCHEDULES:
+                if s != "hourly":
+                    self.schedule.addItem(label)
             self.schedule.addItem("Custom (systemd OnCalendar)")
             self.custom = QLineEdit()
             self.custom.setPlaceholderText("e.g. Mon,Fri 03:30")
             current = self.data.get("schedule", "Sun 04:00")
-            presets = [s for _, s in SCHEDULES]
             if current in presets:
                 self.schedule.setCurrentIndex(presets.index(current))
             else:
                 self.schedule.setCurrentIndex(len(presets))
                 self.custom.setText(current)
-            self.schedule.currentIndexChanged.connect(self.toggle_custom)
+            self.presets = presets
+            self.schedule.currentIndexChanged.connect(lambda i: self.custom.setEnabled(i == len(self.presets)))
+            self.custom.setEnabled(self.schedule.currentIndex() == len(presets))
             form.addRow("When", self.schedule)
             form.addRow("Custom", self.custom)
-            self.toggle_custom()
             self.mode = QComboBox()
             self.mode.addItem("Build now, use at next boot (safer)", "boot")
             self.mode.addItem("Switch immediately", "switch")
@@ -881,33 +1269,20 @@ def gui(smoke_test=False):
             self.reboot = QCheckBox("Reboot automatically when the kernel changed")
             self.reboot.setChecked(bool(self.data.get("reboot")))
             form.addRow(self.reboot)
-            layout.addWidget(box)
-            layout.addStretch(1)
-            row = QHBoxLayout()
-            row.addStretch(1)
-            save = QPushButton(icon("document-save"), "Save")
-            save.clicked.connect(self.save)
-            row.addWidget(save)
-            layout.addLayout(row)
-
-        def toggle_custom(self):
-            self.custom.setEnabled(self.schedule.currentIndex() == len(SCHEDULES))
+            self.layout_.addLayout(form)
+            self.layout_.addStretch(1)
+            self.actions(save=self.save)
 
         def save(self):
-            idx = self.schedule.currentIndex()
-            schedule = SCHEDULES[idx][1] if idx < len(SCHEDULES) else self.custom.text().strip()
+            i = self.schedule.currentIndex()
+            schedule = self.presets[i] if i < len(self.presets) else self.custom.text().strip()
             if not schedule:
                 QMessageBox.warning(self, "Auto updates", "Enter a schedule.")
                 return
-            self.data = {
-                "enabled": self.enabled.isChecked(),
-                "schedule": schedule,
-                "mode": self.mode.currentData(),
-                "reboot": self.reboot.isChecked(),
-                "flatpaks": self.flatpaks.isChecked(),
-            }
-            self.window.log("\n==> Saving auto update settings")
-            if save_and_commit("autoupdate", self.data, "Auto updates: change schedule", self.window.log):
+            self.data = {"enabled": self.enabled.isChecked(), "schedule": schedule, "mode": self.mode.currentData(),
+                         "reboot": self.reboot.isChecked(), "flatpaks": self.flatpaks.isChecked()}
+            self.log("\n==> Saving auto update settings")
+            if save_and_commit("autoupdate", self.data, "Auto updates: change schedule", self.log):
                 self.window.needs_apply()
 
     # -- main window
@@ -917,30 +1292,26 @@ def gui(smoke_test=False):
             super().__init__()
             self.setWindowTitle(APP_NAME)
             self.setWindowIcon(icon(APP_ID, "system-software-update"))
-            self.resize(1040, 720)
+            self.resize(1100, 760)
             self.process = None
             self.queue = []
             self.current_title = ""
             self.done_message = ""
+            self.buttons = []
 
             root = QWidget()
             self.setCentralWidget(root)
             outer = QVBoxLayout(root)
-            outer.setContentsMargins(16, 16, 16, 16)
-            outer.setSpacing(10)
+            outer.setContentsMargins(0, 0, 0, 0)
+            outer.setSpacing(0)
 
-            version, gen = system_info()
-            title = QLabel(APP_NAME)
-            f = title.font()
-            f.setPointSize(f.pointSize() + 6)
-            f.setBold(True)
-            title.setFont(f)
-            outer.addWidget(title)
-            outer.addWidget(hint(f"{version}  •  generation {gen}  •  {CONFIG_DIR}"))
-
+            # Banner (reboot needed / changes to apply)
             self.banner = QFrame()
             self.banner.setFrameShape(QFrame.Shape.StyledPanel)
             bl = QHBoxLayout(self.banner)
+            bl.setContentsMargins(16, 8, 16, 8)
+            self.banner_icon = QLabel()
+            bl.addWidget(self.banner_icon)
             self.banner_text = QLabel()
             bl.addWidget(self.banner_text, 1)
             self.banner_button = QPushButton()
@@ -948,59 +1319,71 @@ def gui(smoke_test=False):
             self.banner.setVisible(False)
             outer.addWidget(self.banner)
 
-            self.tabs = QTabWidget()
-            self.tabs.addTab(self.system_tab(), icon("system-software-update"), "System")
-            self.tabs.addTab(AutostartTab(self), icon("preferences-desktop-startup", "system-run"), "Autostart")
-            self.tabs.addTab(ShortcutsTab(self), icon("preferences-desktop-keyboard", "input-keyboard"), "Shortcuts")
-            self.tabs.addTab(UnitsTab(self), icon("preferences-system-services", "system-run"), "Services")
-            self.tabs.addTab(AutoUpdateTab(self), icon("chronometer", "appointment-new"), "Auto Updates")
-            outer.addWidget(self.tabs, 1)
+            # Sidebar + pages
+            split = QSplitter(Qt.Orientation.Vertical)
+            top = QWidget()
+            tl = QHBoxLayout(top)
+            tl.setContentsMargins(0, 0, 0, 0)
+            tl.setSpacing(0)
+            self.nav = QListWidget()
+            self.nav.setIconSize(QSize(22, 22))
+            self.nav.setFixedWidth(190)
+            self.nav.setFrameShape(QFrame.Shape.NoFrame)
+            self.nav.setSpacing(2)
+            self.pages = QStackedWidget()
+            self.page_objects = []
+            for cls, icons in [
+                (OverviewPage, ["nix-snowflake", "computer"]),
+                (FlatpaksPage, ["flatpak-discover", "package-x-generic"]),
+                (AutostartPage, ["preferences-desktop-startup", "system-run"]),
+                (ShortcutsPage, ["preferences-desktop-keyboard", "input-keyboard"]),
+                (SystemUnitsPage, ["preferences-system-services", "system-run"]),
+                (UserUnitsPage, ["user-identity", "system-users"]),
+                (ScriptsPage, ["text-x-script", "utilities-terminal"]),
+                (AutoUpdatePage, ["chronometer", "appointment-new"]),
+            ]:
+                page = cls(self)
+                self.page_objects.append(page)
+                self.pages.addWidget(page)
+                item = QListWidgetItem(icon(*icons), cls.title)
+                item.setSizeHint(QSize(0, 36))
+                self.nav.addItem(item)
+            self.nav.currentRowChanged.connect(self.pages.setCurrentIndex)
+            self.nav.setCurrentRow(0)
+            tl.addWidget(self.nav)
+            tl.addWidget(self.pages, 1)
+            split.addWidget(top)
 
+            # Activity log
+            bottom = QWidget()
+            bl2 = QVBoxLayout(bottom)
+            bl2.setContentsMargins(16, 6, 16, 8)
+            bl2.setSpacing(4)
+            head = QHBoxLayout()
+            self.status = QLabel("Ready")
+            head.addWidget(QLabel("Activity"))
+            head.addStretch(1)
+            head.addWidget(self.status)
+            bl2.addLayout(head)
             self.log_view = QPlainTextEdit()
             self.log_view.setReadOnly(True)
             self.log_view.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
             self.log_view.setMaximumBlockCount(5000)
-            self.log_view.setMinimumHeight(180)
-            outer.addWidget(self.log_view, 1)
+            bl2.addWidget(self.log_view, 1)
             self.progress = QProgressBar()
             self.progress.setRange(0, 0)
+            self.progress.setFixedHeight(6)
+            self.progress.setTextVisible(False)
             self.progress.setVisible(False)
-            outer.addWidget(self.progress)
+            bl2.addWidget(self.progress)
+            split.addWidget(bottom)
+            split.setStretchFactor(0, 3)
+            split.setStretchFactor(1, 1)
+            split.setSizes([560, 200])
+            outer.addWidget(split, 1)
 
-            self.statusBar().showMessage("Ready")
             self.log(f"Config: {CONFIG_DIR}")
-            self.log("Pick an action. Output appears here.")
             self.refresh_banner()
-
-        def system_tab(self):
-            tab = QWidget()
-            layout = QHBoxLayout(tab)
-            self.buttons = []
-
-            def add_action(text, icon_names, slot, tip):
-                b = QToolButton()
-                b.setText(text)
-                b.setIcon(icon(*icon_names))
-                b.setToolTip(tip)
-                b.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
-                b.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-                b.setMinimumSize(140, 84)
-                b.setIconSize(b.iconSize() * 2)
-                b.clicked.connect(slot)
-                layout.addWidget(b)
-                self.buttons.append(b)
-
-            add_action("Update", ["system-software-update", "update-none"], self.update,
-                       "Sync Flatpaks and autostart, refresh flake inputs, rebuild, update Flatpaks")
-            add_action("Apply", ["dialog-ok-apply", "system-run"], self.apply,
-                       "Rebuild from the config as it is now (after saving changes in the tabs)")
-            add_action("Sync", ["flatpak-discover", "view-refresh"], self.sync,
-                       "Import installed Flatpaks, their permissions and autostart entries into the config")
-            add_action("Push", ["vcs-push", "cloud-upload", "go-up"], self.push, "git push the config repo")
-            add_action("Flush", ["edit-clear-history", "user-trash"], self.flush,
-                       "Remove old generations, boot entries and unused Flatpak runtimes")
-            add_action("Reboot", ["system-reboot"], self.reboot, "Reboot the machine")
-            return tab
 
         # -- helpers
         def log(self, text):
@@ -1010,17 +1393,23 @@ def gui(smoke_test=False):
             for b in self.buttons:
                 b.setEnabled(not busy)
             self.progress.setVisible(busy)
-            self.statusBar().showMessage(message or ("Working…" if busy else "Ready"))
+            self.status.setText(message or ("Working…" if busy else "Ready"))
+
+        def refresh_pages(self):
+            for p in self.page_objects:
+                if hasattr(p, "refresh"):
+                    p.refresh()
 
         def refresh_banner(self):
             if reboot_required():
-                self.show_banner("A newer kernel is installed. Reboot to start using it.", "Reboot now", self.reboot)
+                self.show_banner("system-reboot", "A newer kernel is installed. Reboot to start using it.", "Reboot now", self.reboot)
             else:
                 self.banner.setVisible(False)
 
-        def show_banner(self, text, button, slot):
+        def show_banner(self, icon_name, text, button_text, slot):
+            self.banner_icon.setPixmap(icon(icon_name).pixmap(22, 22))
             self.banner_text.setText(text)
-            self.banner_button.setText(button)
+            self.banner_button.setText(button_text)
             try:
                 self.banner_button.clicked.disconnect()
             except TypeError:
@@ -1029,9 +1418,10 @@ def gui(smoke_test=False):
             self.banner.setVisible(True)
 
         def needs_apply(self):
-            self.log("Saved and committed. Click Apply (or Update) to activate it.")
+            self.log("Saved and committed. Apply (or Update) activates it.")
+            self.refresh_pages()
             if not reboot_required():
-                self.show_banner("Changes saved to the config. Rebuild to activate them.", "Apply now", self.apply)
+                self.show_banner("dialog-ok-apply", "Changes are saved in the config. Rebuild to activate them.", "Apply now", self.apply)
 
         # -- step runner
         def run(self, steps, done_message):
@@ -1049,7 +1439,7 @@ def gui(smoke_test=False):
             title, action = self.queue.pop(0)
             self.current_title = title
             self.log(f"\n==> {title}")
-            self.statusBar().showMessage(title)
+            self.status.setText(title)
             if callable(action):
                 try:
                     action(self.log)
@@ -1080,6 +1470,7 @@ def gui(smoke_test=False):
             self.process = None
             self.queue = []
             self.set_busy(False, "Done" if code == 0 else "Failed")
+            self.refresh_pages()
             self.refresh_banner()
             if code == 0:
                 self.log("\n" + self.done_message)
@@ -1119,7 +1510,7 @@ def gui(smoke_test=False):
     win = Window()
     win.show()
     if smoke_test:
-        QTimer.singleShot(0, lambda: [win.tabs.setCurrentIndex(i) for i in range(win.tabs.count())])
+        QTimer.singleShot(0, lambda: [win.nav.setCurrentRow(i) for i in range(win.nav.count())])
         QTimer.singleShot(300, app.quit)
     return app.exec()
 
@@ -1146,6 +1537,13 @@ def main():
     ua.add_argument("--disabled", action="store_true", help="install but do not enable")
     unit.add_parser("remove", help="remove a unit from the config").add_argument("name")
     unit.add_parser("list", help="list units and their status")
+    script = sub.add_parser("script", help="manage scripts kept in the config").add_subparsers(dest="script_command")
+    sa = script.add_parser("add", help="copy scripts (or companion files with --data) into the config")
+    sa.add_argument("files", nargs="+")
+    sa.add_argument("--data", action="store_true", help="add as companion files, not executable scripts")
+    script.add_parser("remove", help="remove a script or file from the config").add_argument("name")
+    script.add_parser("run", help="run a script from the config").add_argument("name")
+    script.add_parser("list", help="list scripts and files")
     args = parser.parse_args()
     if args.command in (None, "gui"):
         return gui(smoke_test=getattr(args, "smoke_test", False))

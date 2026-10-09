@@ -8,6 +8,7 @@ in
    ./links.nix
    ./autostart.nix
    ./units.nix
+   ./scripts.nix
    ../Apps/git.nix
    ../Apps/starship.nix
    ../Apps/kitty.nix

@@ -47,15 +47,23 @@ through polkit), updates the Flatpaks, and offers a reboot if the kernel
 changed. Flush removes old generations and boot entries and unused Flatpak
 runtimes. Push sends the commits to GitHub.
 
-The other tabs edit parts of the config that describe this machine. Each
-Save commits; Apply (or Update) rebuilds:
+The app is laid out like System Settings: pages in a sidebar, an activity
+log underneath. The Overview page has the big actions; the other pages edit
+parts of the config that describe this machine. Each Save commits; Apply (or
+Update) rebuilds:
 
-| Tab | File | What |
+| Page | File | What |
 | --- | --- | --- |
-| Autostart | `Home/autostart.json` | Apps and commands started with the Plasma session |
-| Shortcuts | `Home/shortcuts.json` | Global shortcuts that run a command (plasma-manager hotkeys) |
-| Services | `Config/units.json`, `Config/units/` | systemd units you drop in (.service, .timer, ...): the file is copied into the repo and installed as a system or user unit, enabled or not |
+| Flatpaks | `Apps/flatpaks.json` | What the config declares; Sync records installs, removals and permission changes |
+| Autostart | `Home/autostart.json` | Apps and commands started with the Plasma session, with a picker over installed apps |
+| Shortcuts | `Home/shortcuts.json` | Global shortcuts that run a command (plasma-manager hotkeys), recorded with a key editor |
+| System Units | `Config/units.json`, `Config/units/` | systemd units for the whole machine: drop `.service`/`.timer` files, or create a timer from a name, command and schedule |
+| User Units | same | The same for home-manager units that run as you inside your session |
+| Scripts | `Home/scripts.json`, `Home/scripts/` | Bash or Python scripts plus companion files; installed to `~/.local/share/nixos-scripts/` and scripts onto PATH via `~/.local/bin`; Run and Edit buttons; the timer wizard can pick one |
 | Auto Updates | `Config/autoupdate.json` | A systemd timer that refreshes inputs, rebuilds (for next boot or immediately), updates Flatpaks, and can reboot when the kernel changed |
+
+Terminal equivalents: `nixos-updater unit add|remove|list` and
+`nixos-updater script add|remove|run|list`.
 
 ## Layout
 
@@ -68,7 +76,7 @@ Save commits; Apply (or Update) rebuilds:
 | `Config/` | Boot, hardware, networking, locale, services, users, nix settings |
 | `Apps/` | Per-app modules (Steam, kitty, fish, VSCodium, Zen, the updater app, ...) |
 | `Apps/flatpaks.json` | Installed Flatpaks and their permissions, kept in sync by the updater |
-| `Home/autostart.json`, `Home/shortcuts.json`, `Config/units.json` + `Config/units/`, `Config/autoupdate.json` | Edited by the updater's tabs |
+| `Home/autostart.json`, `Home/shortcuts.json`, `Home/scripts.json` + `Home/scripts/`, `Config/units.json` + `Config/units/`, `Config/autoupdate.json` | Edited by the updater's pages |
 | `Home/` | home-manager entry point, native packages, home folder links |
 | `Theme/` | Plasma and GTK theming |
 | `Files/` | Theme archives unpacked at build time |
