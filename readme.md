@@ -54,7 +54,7 @@ Save commits; Apply (or Update) rebuilds:
 | --- | --- | --- |
 | Autostart | `Home/autostart.json` | Apps and commands started with the Plasma session |
 | Shortcuts | `Home/shortcuts.json` | Global shortcuts that run a command (plasma-manager hotkeys) |
-| Services | `Config/services.json` | On/off switches for SSH, KDE Connect, Tailscale, Syncthing, Docker, libvirt, Sunshine, Jellyfin, fwupd, Ollama; the NixOS side of each lives in `Config/services-toggles.nix` |
+| Services | `Config/services.json` | On/off switches for SSH, KDE Connect, Tailscale, Syncthing, Docker, libvirt, Sunshine, Jellyfin, fwupd; the NixOS side of each lives in `Config/services-toggles.nix` |
 | Auto Updates | `Config/autoupdate.json` | A systemd timer that refreshes inputs, rebuilds (for next boot or immediately), updates Flatpaks, and can reboot when the kernel changed |
 
 ## Layout

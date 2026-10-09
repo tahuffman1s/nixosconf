@@ -19,10 +19,6 @@
     "description": "Virtual machines with libvirt and virt-manager",
     "enabled": false
   },
-  "ollama": {
-    "description": "Ollama local LLM server with ROCm acceleration on the Radeon",
-    "enabled": false
-  },
   "openssh": {
     "description": "SSH server so other machines can log in to this one",
     "enabled": false
