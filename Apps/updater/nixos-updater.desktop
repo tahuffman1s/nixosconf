@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=NixOS Updater
+GenericName=System Updater
+Comment=Update the system from its flake, sync Flatpaks into the config, flush old generations
+Exec=nixos-updater
+Icon=nixos-updater
+Terminal=false
+Categories=System;Settings;
+Keywords=update;upgrade;nixos;flatpak;rebuild;

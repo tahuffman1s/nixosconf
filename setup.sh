@@ -272,7 +272,7 @@ elif [ -f "$unit" ]; then
   read -r -a installer <<<"$(sed -n 's/^ExecStart=//p' "$unit" | head -1)"
   say "Installing the Flatpaks from Apps/flatpaks.nix (this is the slow part)"
   sudo -u "$USER_NAME" -H env XDG_RUNTIME_DIR="/run/user/$(id -u "$USER_NAME")" "${installer[@]}" \
-    || warn "Flatpak install did not finish; it runs again at login and on the next topgrade"
+    || warn "Flatpak install did not finish; it runs again at login and on the next update"
 else
   warn "Flatpak installer not found; the Flatpaks will be installed at the next login"
 fi
@@ -284,7 +284,7 @@ say "Done."
 cat <<MSG
 
   Config:    $DIR  (branch $BRANCH), reachable as $LINK
-  Update:    topgrade          (refreshes flake inputs, rebuilds, updates flatpaks)
+  Update:    nixos-updater     (or the NixOS Updater app in the start menu)
   Rebuild:   sudo nixos-rebuild switch --flake $LINK
 
 MSG

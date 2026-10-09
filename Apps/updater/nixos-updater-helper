@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Privileged half of nixos-updater, run through polkit (pkexec) or sudo.
+# Only ever acts on the config that /etc/nixos points at.
+set -euo pipefail
+export PATH=/run/wrappers/bin:/run/current-system/sw/bin:${PATH:-}
+export HOME=/root
+
+action="${1:-}"
+dir="${2:-/etc/nixos}"
+allowed="$(readlink -f /etc/nixos)"
+if [ "$(readlink -f "$dir")" != "$allowed" ]; then
+  echo "nixos-updater-helper: refusing to use $dir; only $allowed is allowed" >&2
+  exit 2
+fi
+
+case "$action" in
+  switch)
+    exec nixos-rebuild switch --flake "$allowed#nixos"
+    ;;
+  flush)
+    nix-collect-garbage -d
+    # drop the boot entries of the generations that just went away
+    /run/current-system/bin/switch-to-configuration boot
+    flatpak uninstall --system --unused -y --noninteractive || true
+    ;;
+  *)
+    echo "usage: nixos-updater-helper switch|flush [config-dir]" >&2
+    exit 2
+    ;;
+esac

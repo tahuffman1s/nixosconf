@@ -1,0 +1,39 @@
+{
+  "overrides": {
+    "global": {
+      "Context": {
+        "filesystems": [
+          "xdg-config/gtk-4.0",
+          "xdg-config/gtk-3.0",
+          "~/.themes",
+          "~/.icons",
+          "/mnt/GD1",
+          "/mnt/GD2"
+        ]
+      },
+      "Environment": {
+        "GTK_THEME": "Dracula",
+        "ICON_THEME": "Tela-circle-dracula",
+        "XCURSOR_PATH": "/run/host/user-share/icons:/run/host/share/icons"
+      }
+    }
+  },
+  "packages": [
+    "app.zen_browser.zen",
+    "com.calibre_ebook.calibre",
+    "com.dec05eba.gpu_screen_recorder",
+    "com.heroicgameslauncher.hgl",
+    "com.protonvpn.www",
+    "com.spotify.Client",
+    "io.github.input_leap.input-leap",
+    "it.mijorus.gearlever",
+    "net.davidotek.pupgui2",
+    "net.filebot.FileBot",
+    "org.fooyin.fooyin",
+    "org.libreoffice.LibreOffice",
+    "org.localsend.localsend_app",
+    "org.qbittorrent.qBittorrent",
+    "org.signal.Signal",
+    "org.videolan.VLC"
+  ]
+}

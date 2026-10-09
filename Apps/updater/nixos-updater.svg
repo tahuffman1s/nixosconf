@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <rect x="4" y="4" width="56" height="56" rx="12" fill="#282a36"/>
+  <!-- two arrows chasing each other -->
+  <path d="M46.5 23.5 A17 17 0 0 0 17.5 26" fill="none" stroke="#bd93f9" stroke-width="5" stroke-linecap="round"/>
+  <path d="M15 17 L17 28 L28 26 Z" fill="#bd93f9"/>
+  <path d="M17.5 40.5 A17 17 0 0 0 46.5 38" fill="none" stroke="#8be9fd" stroke-width="5" stroke-linecap="round"/>
+  <path d="M49 47 L47 36 L36 38 Z" fill="#8be9fd"/>
+  <!-- snowflake dot in the middle -->
+  <circle cx="32" cy="32" r="4" fill="#f8f8f2"/>
+</svg>

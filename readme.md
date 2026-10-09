@@ -31,13 +31,20 @@ curl -fsSL https://raw.githubusercontent.com/tahuffman1s/nixosconf/main/setup.sh
 
 ## Day to day
 
+Open **NixOS Updater** from the start menu, or in a terminal:
+
 ```sh
-topgrade                                       # or `update` in fish
+nixos-updater update                           # or `update` in fish
+nixos-updater scan                             # sync Flatpaks into the config
+nixos-updater flush                            # or `flush` in fish
 sudo nixos-rebuild switch --flake /etc/nixos   # or `swap` in fish, after editing
 ```
 
-topgrade is configured in `Apps/topgrade.nix`: it refreshes `flake.lock`,
-runs `nixos-rebuild switch --flake /etc/nixos`, then updates the Flatpaks.
+Update scans the installed Flatpaks and their permissions into
+`Apps/flatpaks.json`, commits that, refreshes `flake.lock`, runs
+`nixos-rebuild switch --flake /etc/nixos` (asking for your password through
+polkit), updates the Flatpaks, and offers a reboot if the kernel changed.
+Flush removes old generations and boot entries and unused Flatpak runtimes.
 
 ## Layout
 
@@ -48,7 +55,8 @@ runs `nixos-rebuild switch --flake /etc/nixos`, then updates the Flatpaks.
 | `drives.nix` | GD1 and GD2 mounts (written by setup.sh) |
 | `configuration.nix` | System module list |
 | `Config/` | Boot, hardware, networking, locale, services, users, nix settings |
-| `Apps/` | Per-app modules (Steam, kitty, fish, VSCodium, Flatpak list, ...) |
+| `Apps/` | Per-app modules (Steam, kitty, fish, VSCodium, Zen, the updater app, ...) |
+| `Apps/flatpaks.json` | Installed Flatpaks and their permissions, kept in sync by the updater |
 | `Home/` | home-manager entry point, native packages, home folder links |
 | `Theme/` | Plasma and GTK theming |
 | `Files/` | Theme archives unpacked at build time |

@@ -1,53 +1,13 @@
 { config, pkgs, ...}:
 let 
+  # The Flatpak list and permission overrides live in flatpaks.json so the
+  # NixOS Updater app can regenerate them from what is actually installed
+  # (`nixos-updater scan`). Edit the JSON by hand if you like; the app keeps
+  # it sorted. Filesystem entries may use "~/" for the home directory.
+  data = builtins.fromJSON (builtins.readFile ./flatpaks.json);
 in 
 {
   services.flatpak.update.auto.enable = true;
-
-  # Desktop apps come from Flathub wherever one exists. Anything that needs
-  # tight system integration (Steam, kitty, VSCodium, via, ...) stays native.
-  services.flatpak.packages = [
-    # Browser
-    "app.zen_browser.zen"
-    # Communication
-    "org.signal.Signal"
-    # Media
-    "com.spotify.Client"
-    "org.videolan.VLC"
-    "org.fooyin.fooyin"
-    "org.qbittorrent.qBittorrent"
-    # Productivity
-    "org.libreoffice.LibreOffice"
-    "com.calibre_ebook.calibre"
-    "net.filebot.FileBot"
-    # Utilities
-    "it.mijorus.gearlever"
-    "com.protonvpn.www"
-    "io.github.input_leap.input-leap"
-    "org.localsend.localsend_app"
-    # Gaming
-    "com.heroicgameslauncher.hgl"
-    "net.davidotek.pupgui2"
-    "com.dec05eba.gpu_screen_recorder"
-  ];
-
-  services.flatpak.overrides = {
-    global = {
-      Context.filesystems = [
-        "xdg-config/gtk-4.0"
-        "xdg-config/gtk-3.0"
-        "${config.home.homeDirectory}/.themes"
-        "${config.home.homeDirectory}/.icons"
-        # Game drive, and the backup drive that the home folders link into
-        # (flatpak does not follow symlinks out of the sandbox otherwise).
-        "/mnt/GD1"
-        "/mnt/GD2"
-      ];
-      Environment = {
-        XCURSOR_PATH = "/run/host/user-share/icons:/run/host/share/icons";
-        GTK_THEME = "Dracula";
-        ICON_THEME = "Tela-circle-dracula";
-      };
-    };
-  };
+  services.flatpak.packages = data.packages;
+  services.flatpak.overrides = data.overrides;
 }

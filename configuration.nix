@@ -18,6 +18,7 @@
       ./Apps/bash.nix
       ./Apps/steam.nix
       ./Apps/zen.nix
+      ./Apps/updater.nix
     ];
   system.stateVersion = "25.11";
 }
