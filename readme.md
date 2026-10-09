@@ -40,11 +40,22 @@ nixos-updater flush                            # or `flush` in fish
 sudo nixos-rebuild switch --flake /etc/nixos   # or `swap` in fish, after editing
 ```
 
-Update scans the installed Flatpaks and their permissions into
-`Apps/flatpaks.json`, commits that, refreshes `flake.lock`, runs
-`nixos-rebuild switch --flake /etc/nixos` (asking for your password through
-polkit), updates the Flatpaks, and offers a reboot if the kernel changed.
-Flush removes old generations and boot entries and unused Flatpak runtimes.
+Update syncs the installed Flatpaks, their permissions and any autostart
+entries Plasma created into the config, commits that, refreshes `flake.lock`,
+runs `nixos-rebuild switch --flake /etc/nixos` (asking for your password
+through polkit), updates the Flatpaks, and offers a reboot if the kernel
+changed. Flush removes old generations and boot entries and unused Flatpak
+runtimes. Push sends the commits to GitHub.
+
+The other tabs edit parts of the config that describe this machine. Each
+Save commits; Apply (or Update) rebuilds:
+
+| Tab | File | What |
+| --- | --- | --- |
+| Autostart | `Home/autostart.json` | Apps and commands started with the Plasma session |
+| Shortcuts | `Home/shortcuts.json` | Global shortcuts that run a command (plasma-manager hotkeys) |
+| Services | `Config/services.json` | On/off switches for SSH, KDE Connect, Tailscale, Syncthing, Docker, libvirt, Sunshine, Jellyfin, fwupd, Ollama; the NixOS side of each lives in `Config/services-toggles.nix` |
+| Auto Updates | `Config/autoupdate.json` | A systemd timer that refreshes inputs, rebuilds (for next boot or immediately), updates Flatpaks, and can reboot when the kernel changed |
 
 ## Layout
 
@@ -57,6 +68,7 @@ Flush removes old generations and boot entries and unused Flatpak runtimes.
 | `Config/` | Boot, hardware, networking, locale, services, users, nix settings |
 | `Apps/` | Per-app modules (Steam, kitty, fish, VSCodium, Zen, the updater app, ...) |
 | `Apps/flatpaks.json` | Installed Flatpaks and their permissions, kept in sync by the updater |
+| `Home/autostart.json`, `Home/shortcuts.json`, `Config/services.json`, `Config/autoupdate.json` | Edited by the updater's tabs |
 | `Home/` | home-manager entry point, native packages, home folder links |
 | `Theme/` | Plasma and GTK theming |
 | `Files/` | Theme archives unpacked at build time |

@@ -1,30 +1,65 @@
 #!/usr/bin/env bash
-# Privileged half of nixos-updater, run through polkit (pkexec) or sudo.
-# Only ever acts on the config that /etc/nixos points at.
+# Privileged half of nixos-updater, run through polkit (pkexec), sudo, or the
+# nixos-updater-auto timer. Only ever acts on the config /etc/nixos points at.
 set -euo pipefail
 export PATH=/run/wrappers/bin:/run/current-system/sw/bin:${PATH:-}
 export HOME=/root
 
 action="${1:-}"
-dir="${2:-/etc/nixos}"
 allowed="$(readlink -f /etc/nixos)"
-if [ "$(readlink -f "$dir")" != "$allowed" ]; then
-  echo "nixos-updater-helper: refusing to use $dir; only $allowed is allowed" >&2
-  exit 2
-fi
+
+check_dir() {
+  if [ "$(readlink -f "${1:-/etc/nixos}")" != "$allowed" ]; then
+    echo "nixos-updater-helper: refusing to use $1; only $allowed is allowed" >&2
+    exit 2
+  fi
+}
+
+# Does the system profile carry a different kernel than the one running?
+kernel_changed() {
+  [ "$(readlink -f /nix/var/nix/profiles/system/kernel)" != "$(readlink -f /run/booted-system/kernel)" ]
+}
 
 case "$action" in
   switch)
+    check_dir "${2:-}"
     exec nixos-rebuild switch --flake "$allowed#nixos"
     ;;
   flush)
+    check_dir "${2:-}"
     nix-collect-garbage -d
     # drop the boot entries of the generations that just went away
     /run/current-system/bin/switch-to-configuration boot
     flatpak uninstall --system --unused -y --noninteractive || true
     ;;
+  auto)
+    # auto <user> <boot|switch> <reboot 0|1> <flatpaks 0|1>
+    user="${2:?user}"; mode="${3:-boot}"; want_reboot="${4:-0}"; flatpaks="${5:-1}"
+    case "$mode" in boot|switch) ;; *) echo "bad mode $mode" >&2; exit 2;; esac
+    home="$(getent passwd "$user" | cut -d: -f6)"
+    uid="$(id -u "$user")"
+    as_user() { runuser -u "$user" -- env HOME="$home" XDG_RUNTIME_DIR="/run/user/$uid" "$@"; }
+
+    echo "==> Refreshing flake inputs"
+    as_user nix flake update --flake "$allowed"
+    as_user git -C "$allowed" add flake.lock
+    as_user git -C "$allowed" commit -q -m "Auto update: flake inputs" || true
+
+    echo "==> nixos-rebuild $mode"
+    nixos-rebuild "$mode" --flake "$allowed#nixos"
+
+    if [ "$flatpaks" = 1 ]; then
+      echo "==> Updating Flatpaks"
+      as_user flatpak update --user -y --noninteractive || true
+    fi
+
+    if [ "$want_reboot" = 1 ] && kernel_changed; then
+      echo "==> Kernel changed, rebooting"
+      systemctl reboot
+    fi
+    ;;
   *)
-    echo "usage: nixos-updater-helper switch|flush [config-dir]" >&2
+    echo "usage: nixos-updater-helper switch|flush [config-dir] | auto <user> <boot|switch> <reboot> <flatpaks>" >&2
     exit 2
     ;;
 esac

@@ -1,4 +1,4 @@
-{ config, pkgs, ...}:
+{ config, pkgs, lib, ...}:
 let 
   # Shipped in this repo (Files/), unpacked in a derivation instead of being
   # downloaded from GitHub at evaluation time.
@@ -27,11 +27,11 @@ in
     };
     # Let fullscreen games bypass the compositor's vsync for lower latency.
     configFile.kwinrc.Wayland.AllowTearing = true;
-    hotkeys.commands."launch-kitty" = {
-      name = "Launch Kitty";
-      key = "Ctrl+Alt+T";
-      command = "kitty";
-    };
+    # Custom command shortcuts, managed by NixOS Updater (Shortcuts tab).
+    hotkeys.commands = lib.listToAttrs (map (s: {
+      name = lib.toLower (builtins.replaceStrings [ " " ] [ "-" ] s.name);
+      value = { inherit (s) name key command; };
+    }) (builtins.fromJSON (builtins.readFile ../Home/shortcuts.json)));
     panels = [
       {
         location = "bottom";

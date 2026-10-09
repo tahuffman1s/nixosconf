@@ -6,6 +6,7 @@ in
    ./packages.nix
    ./settings.nix
    ./links.nix
+   ./autostart.nix
    ../Apps/git.nix
    ../Apps/starship.nix
    ../Apps/kitty.nix

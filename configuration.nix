@@ -15,6 +15,7 @@
       ./Config/networking.nix
       ./Config/environment.nix
       ./Config/nixsettings.nix
+      ./Config/services-toggles.nix
       ./Apps/bash.nix
       ./Apps/steam.nix
       ./Apps/zen.nix

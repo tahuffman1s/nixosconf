@@ -1,0 +1,7 @@
+[
+  {
+    "command": "kitty",
+    "key": "Ctrl+Alt+T",
+    "name": "Launch Kitty"
+  }
+]

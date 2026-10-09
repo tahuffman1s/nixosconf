@@ -1,0 +1,7 @@
+{
+  "enabled": false,
+  "flatpaks": true,
+  "mode": "boot",
+  "reboot": false,
+  "schedule": "Sun 04:00"
+}
