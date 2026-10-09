@@ -15,6 +15,7 @@ GUI by default (Qt, follows the Plasma style). Subcommands for the terminal:
     nixos-updater script add FILE... [--data] [--post-update] [--root] | remove NAME | run NAME | list
     nixos-updater script post-update NAME on|off | root NAME on|off
     nixos-updater defaults list | set CATEGORY DESKTOP-FILE | import
+    nixos-updater app search TERM [--flathub|--nixpkgs] | add (--flatpak|--nix) ID | remove ID
 """
 
 import argparse
@@ -44,6 +45,7 @@ FILES = {
     "scripts": CONFIG_DIR / "Home" / "scripts.json",
     "autoupdate": CONFIG_DIR / "Config" / "autoupdate.json",
     "defaults": CONFIG_DIR / "Home" / "defaults.json",
+    "packages": CONFIG_DIR / "Home" / "packages.json",
 }
 DEFAULTS = {
     "flatpaks": {"packages": [], "overrides": {}},
@@ -53,6 +55,7 @@ DEFAULTS = {
     "scripts": [],
     "autoupdate": {"enabled": False, "schedule": "Sun 04:00", "mode": "boot", "reboot": False, "flatpaks": True},
     "defaults": {},
+    "packages": [],
 }
 # Default-application categories: label and the MIME types they stand for
 # (mirrors Home/defaults.nix). "terminal" is special: Plasma reads it from
@@ -265,6 +268,88 @@ def flatpak_diff(old, new):
     old_ov, new_ov = old.get("overrides", {}), new.get("overrides", {})
     lines += [f"~ permissions changed: {n}" for n in sorted(set(old_ov) | set(new_ov)) if old_ov.get(n) != new_ov.get(n)]
     return lines
+
+
+# ---------------------------------------------------------------------------
+# App search (Flathub and the config's pinned nixpkgs), add and remove
+
+
+def flathub_search_cmd(term):
+    body = json.dumps({"query": term})
+    return ["curl", "-sS", "--max-time", "20", "-X", "POST", "-H", "Content-Type: application/json",
+            "-d", body, "https://flathub.org/api/v2/search"]
+
+
+def parse_flathub(text):
+    try:
+        hits = json.loads(text).get("hits", [])
+    except (ValueError, AttributeError):
+        return []
+    return [{"source": "flathub", "id": h.get("app_id", ""), "name": h.get("name", ""),
+             "summary": h.get("summary", ""), "verified": bool(h.get("verification_verified"))}
+            for h in hits if h.get("app_id")]
+
+
+def nix_search_cmd(term):
+    # --inputs-from: "nixpkgs" is the config's locked input, not whatever the registry points at
+    return ["nix", "search", "--inputs-from", str(CONFIG_DIR), "nixpkgs", term, "--json"]
+
+
+def parse_nix(text):
+    try:
+        data = json.loads(text or "{}")
+    except ValueError:
+        return []
+    out = []
+    for key, v in data.items():
+        attr = key.split(".", 2)[-1] if key.startswith("legacyPackages.") else key
+        out.append({"source": "nixpkgs", "id": attr, "name": f'{v.get("pname", attr)} {v.get("version", "")}'.strip(),
+                    "summary": v.get("description", ""), "verified": True})
+    return sorted(out, key=lambda r: (len(r["id"]), r["id"]))
+
+
+def declared_apps():
+    """Everything the config installs through these pages: flatpaks and extra nixpkgs packages."""
+    flat = [{"source": "flathub", "id": a} for a in load_json("flatpaks").get("packages", [])]
+    nix = [{"source": "nixpkgs", "id": a} for a in load_json("packages")]
+    return flat + nix
+
+
+def add_app(source, app_id):
+    """Record an app in the config; returns (changed, extra steps to run)."""
+    if source == "flathub":
+        data = load_json("flatpaks")
+        if app_id in data["packages"]:
+            return False, []
+        data["packages"] = sorted(set(data["packages"]) | {app_id})
+        save_json("flatpaks", data)
+        return True, [(f"Installing {app_id} from Flathub",
+                       ["flatpak", "install", "--user", "-y", "--noninteractive", "flathub", app_id])]
+    names = load_json("packages")
+    if app_id in names:
+        return False, []
+    save_json("packages", sorted(set(names) | {app_id}))
+    return True, []
+
+
+def remove_app(app_id):
+    """Drop an app from the config; returns (source or None, extra steps)."""
+    data = load_json("flatpaks")
+    if app_id in data.get("packages", []):
+        data["packages"] = [a for a in data["packages"] if a != app_id]
+        data.get("overrides", {}).pop(app_id, None)
+        save_json("flatpaks", data)
+        return "flathub", [(f"Uninstalling {app_id}",
+                            ["flatpak", "uninstall", "--user", "-y", "--noninteractive", app_id])]
+    names = load_json("packages")
+    if app_id in names:
+        save_json("packages", [n for n in names if n != app_id])
+        return "nixpkgs", []
+    return None, []
+
+
+def commit_apps(log):
+    log(git_commit([FILES["flatpaks"], FILES["packages"]], "Apps: update installed applications"))
 
 
 # ---------------------------------------------------------------------------
@@ -830,6 +915,37 @@ def cli(args):
         return 1
     if args.command == "reboot":
         os.execvp("systemctl", ["systemctl", "reboot"])
+    if args.command == "app":
+        if args.app_command == "search":
+            results = []
+            if not args.nixpkgs:
+                results += parse_flathub(run_capture(flathub_search_cmd(args.term)))
+            if not args.flathub:
+                results += parse_nix(run_capture(nix_search_cmd(args.term)))
+            for r in results[:60]:
+                print(f'{r["source"]:8} {r["id"]:44} {r["name"][:28]:28} {r["summary"][:60]}')
+            return 0
+        if args.app_command == "add":
+            source = "flathub" if args.flatpak else "nixpkgs"
+            changed, steps = add_app(source, args.id)
+            print(f'{args.id} {"added to" if changed else "is already in"} the config ({source})')
+            commit_apps(echo)
+            if steps:
+                return run_steps_cli(steps)
+            if changed and source == "nixpkgs":
+                print("Run `nixos-updater apply` to install it.")
+            return 0
+        if args.app_command == "remove":
+            source, steps = remove_app(args.id)
+            if not source:
+                print(f"{args.id} is not in the config", file=sys.stderr)
+                return 1
+            print(f"{args.id} removed from the config ({source})")
+            commit_apps(echo)
+            if steps:
+                return run_steps_cli(steps)
+            print("Run `nixos-updater apply` to remove it from the system.")
+            return 0
     if args.command == "defaults":
         data = load_json("defaults")
         apps = available_apps()
@@ -1168,7 +1284,7 @@ def gui(smoke_test=False):
                 ("System", version),
                 ("Generation", gen),
                 ("Config", str(CONFIG_DIR)),
-                ("Flatpaks declared", str(len(load_json("flatpaks").get("packages", [])))),
+                ("Apps declared", f'{len(load_json("flatpaks").get("packages", []))} flatpaks, {len(load_json("packages"))} nixpkgs packages'),
                 ("Unpushed commits", str(unpushed_commits())),
                 ("Remote", remote_summary()),
             ]
@@ -1219,34 +1335,154 @@ def gui(smoke_test=False):
             version, gen = system_info()
             self.facts["System"].setText(version)
             self.facts["Generation"].setText(gen)
-            self.facts["Flatpaks declared"].setText(str(len(load_json("flatpaks").get("packages", []))))
+            self.facts["Apps declared"].setText(f'{len(load_json("flatpaks").get("packages", []))} flatpaks, {len(load_json("packages"))} nixpkgs packages')
             self.facts["Unpushed commits"].setText(str(unpushed_commits()))
             self.facts["Remote"].setText(remote_summary())
 
-    class FlatpaksPage(Page):
-        title = "Flatpaks"
-        subtitle = ("What the config declares. Install and remove apps with Bazaar, change permissions in Flatseal or "
-                    "Plasma's Flatpak settings, then Sync to record it; Update does this on its own.")
+    class AppsPage(Page):
+        title = "Apps"
+        subtitle = ("Search Flathub and this config's nixpkgs, add what you want, remove what you do not. Flatpaks "
+                    "are installed or uninstalled right away; nixpkgs packages arrive with the next Apply. Apps "
+                    "installed through Bazaar are picked up by Sync.")
 
         def body(self):
-            self.table = table(["Application", "Custom permissions"])
-            self.layout_.addWidget(self.table, 1)
-            self.actions(button("Sync now", ["view-refresh"], self.window.sync),
+            search_row = QHBoxLayout()
+            self.query = QLineEdit()
+            self.query.setPlaceholderText("Search applications…")
+            self.query.setClearButtonEnabled(True)
+            self.query.returnPressed.connect(self.search)
+            self.source = QComboBox()
+            self.source.addItem("Flathub and nixpkgs", "both")
+            self.source.addItem("Flathub only", "flathub")
+            self.source.addItem("nixpkgs only", "nixpkgs")
+            self.search_button = button("Search", ["search", "edit-find"], self.search)
+            search_row.addWidget(self.query, 1)
+            search_row.addWidget(self.source)
+            search_row.addWidget(self.search_button)
+            self.layout_.addLayout(search_row)
+
+            self.results = table(["Source", "ID", "Name", "Summary"])
+            self.results.setMinimumHeight(160)
+            self.results.itemDoubleClicked.connect(lambda _: self.add_selected())
+            self.layout_.addWidget(self.results, 2)
+            row = QHBoxLayout()
+            self.search_status = muted("Type a name and press Enter.")
+            row.addWidget(self.search_status, 1)
+            row.addWidget(button("Add selected", ["list-add"], self.add_selected))
+            self.layout_.addLayout(row)
+
+            label = QLabel("In the config")
+            f = label.font()
+            f.setBold(True)
+            label.setFont(f)
+            self.layout_.addWidget(label)
+            self.table = table(["Source", "ID", "Custom permissions"])
+            self.layout_.addWidget(self.table, 2)
+            self.actions(button("Remove selected", ["list-remove"], self.remove_selected),
+                         button("Sync now", ["view-refresh"], self.window.sync),
                          button("Open Bazaar", ["io.github.kolunmi.Bazaar", "flatpak-discover"],
                                 lambda: subprocess.Popen(["bazaar"])))
+            self.pending = 0
+            self.found = []
             self.refresh()
 
         def refresh(self):
             data = load_json("flatpaks")
             self.table.setRowCount(0)
-            for app in data.get("packages", []):
+            for app in declared_apps():
                 r = self.table.rowCount()
                 self.table.insertRow(r)
-                self.table.setItem(r, 0, QTableWidgetItem(icon(app, "application-x-executable"), app))
-                ov = data.get("overrides", {}).get(app, {})
-                summary = ", ".join(f"{k}: {len(v)}" for k, v in ov.items()) if ov else ""
-                self.table.setItem(r, 1, QTableWidgetItem(summary))
-            self.table.resizeColumnToContents(0)
+                self.table.setItem(r, 0, QTableWidgetItem(icon("flatpak-discover" if app["source"] == "flathub" else "nix-snowflake", "package-x-generic"), app["source"]))
+                self.table.setItem(r, 1, QTableWidgetItem(app["id"]))
+                ov = data.get("overrides", {}).get(app["id"], {}) if app["source"] == "flathub" else {}
+                self.table.setItem(r, 2, QTableWidgetItem(", ".join(f"{k}: {len(v)}" for k, v in ov.items())))
+            self.table.resizeColumnsToContents()
+
+        # -- search
+        def search(self):
+            term = self.query.text().strip()
+            if not term or self.pending:
+                return
+            self.found = []
+            self.results.setRowCount(0)
+            which = self.source.currentData()
+            cmds = []
+            if which in ("both", "flathub"):
+                cmds.append((flathub_search_cmd(term), parse_flathub))
+            if which in ("both", "nixpkgs"):
+                cmds.append((nix_search_cmd(term), parse_nix))
+            self.pending = len(cmds)
+            self.search_button.setEnabled(False)
+            self.search_status.setText("Searching… (the first nixpkgs search takes a while)")
+            for argv, parser in cmds:
+                self.window.capture(argv, lambda out, code, parser=parser: self.search_done(parser(out), code))
+
+        def search_done(self, results, code):
+            self.pending -= 1
+            self.found += results
+            if self.pending == 0:
+                self.search_button.setEnabled(True)
+                declared = {(a["source"], a["id"]) for a in declared_apps()}
+                self.results.setRowCount(0)
+                for r in self.found:
+                    row = self.results.rowCount()
+                    self.results.insertRow(row)
+                    self.results.setItem(row, 0, QTableWidgetItem(icon("flatpak-discover" if r["source"] == "flathub" else "nix-snowflake", "package-x-generic"), r["source"]))
+                    name = r["name"] + ("" if r.get("verified", True) else "  (unverified)")
+                    for c, text in ((1, r["id"]), (2, name), (3, r["summary"])):
+                        item = QTableWidgetItem(text)
+                        if (r["source"], r["id"]) in declared:
+                            item.setToolTip("already in the config")
+                            f = item.font()
+                            f.setItalic(True)
+                            item.setFont(f)
+                        self.results.setItem(row, c, item)
+                self.results.resizeColumnsToContents()
+                self.search_status.setText(f"{len(self.found)} results" if self.found else "Nothing found.")
+
+        def selected_results(self):
+            return [self.found[r] for r in sorted({i.row() for i in self.results.selectedIndexes()}) if r < len(self.found)]
+
+        def add_selected(self):
+            steps = []
+            added = []
+            for r in self.selected_results():
+                changed, extra = add_app(r["source"], r["id"])
+                if changed:
+                    added.append(f'{r["id"]} ({r["source"]})')
+                    steps += extra
+            if not added:
+                self.window.log("Nothing new selected.")
+                return
+            self.window.log("\n==> Adding " + ", ".join(added))
+            commit_apps(self.window.log)
+            self.refresh()
+            if steps:
+                self.window.run(steps, "Install finished.")
+            if any(r["source"] == "nixpkgs" for r in self.selected_results()):
+                self.window.needs_apply()
+
+        def remove_selected(self):
+            rows = sorted({i.row() for i in self.table.selectedIndexes()})
+            ids = [self.table.item(r, 1).text() for r in rows]
+            if not ids:
+                return
+            if QMessageBox.question(self, "Remove", "Remove from the config: " + ", ".join(ids) + "?\n\n"
+                                    "Flatpaks are uninstalled now; nixpkgs packages go with the next Apply.") != QMessageBox.StandardButton.Yes:
+                return
+            steps = []
+            nix_removed = False
+            for app_id in ids:
+                source, extra = remove_app(app_id)
+                steps += extra
+                nix_removed |= source == "nixpkgs"
+            self.window.log("\n==> Removing " + ", ".join(ids))
+            commit_apps(self.window.log)
+            self.refresh()
+            if steps:
+                self.window.run(steps, "Removal finished.")
+            if nix_removed:
+                self.window.needs_apply()
 
     class AutostartPage(Page):
         title = "Autostart"
@@ -1695,7 +1931,7 @@ def gui(smoke_test=False):
             self.page_objects = []
             for cls, icons in [
                 (OverviewPage, ["nix-snowflake", "computer"]),
-                (FlatpaksPage, ["flatpak-discover", "package-x-generic"]),
+                (AppsPage, ["flatpak-discover", "package-x-generic"]),
                 (AutostartPage, ["preferences-desktop-startup", "system-run"]),
                 (ShortcutsPage, ["preferences-desktop-keyboard", "input-keyboard"]),
                 (SystemUnitsPage, ["preferences-system-services", "system-run"]),
@@ -1784,6 +2020,21 @@ def gui(smoke_test=False):
             self.refresh_pages()
             if not reboot_required():
                 self.show_banner("dialog-ok-apply", "Changes are saved in the config. Rebuild to activate them.", "Apply now", self.apply)
+
+        def capture(self, argv, callback):
+            """Run a command in the background and hand its stdout to callback(text, code)."""
+            p = QProcess(self)
+            p.setWorkingDirectory(str(CONFIG_DIR))
+            self._captures = getattr(self, "_captures", [])
+            self._captures.append(p)
+
+            def done(code, _status):
+                self._captures.remove(p)
+                callback(bytes(p.readAllStandardOutput()).decode(errors="replace"), code)
+
+            p.finished.connect(done)
+            p.errorOccurred.connect(lambda err: self.log(f"could not run {argv[0]}: {err.name}"))
+            p.start(argv[0], argv[1:])
 
         # -- step runner
         def run(self, steps, done_message):
@@ -1973,7 +2224,19 @@ def main():
     ds.add_argument("category")
     ds.add_argument("desktop_file")
     defaults.add_parser("import", help="read the current choices from mimeapps.list into the config")
+    app = sub.add_parser("app", help="search, add and remove applications").add_subparsers(dest="app_command")
+    asr = app.add_parser("search", help="search Flathub and the config's nixpkgs")
+    asr.add_argument("term")
+    asr.add_argument("--flathub", action="store_true", help="only Flathub")
+    asr.add_argument("--nixpkgs", action="store_true", help="only nixpkgs")
+    aad = app.add_parser("add", help="add an app to the config (and install a flatpak right away)")
+    aad.add_argument("id", help="Flathub app id or nixpkgs attribute (e.g. kdePackages.kate)")
+    aad.add_argument("--flatpak", action="store_true")
+    aad.add_argument("--nix", action="store_true")
+    app.add_parser("remove", help="remove an app from the config (and uninstall a flatpak)").add_argument("id")
     args = parser.parse_args()
+    if args.command == "app" and args.app_command == "add" and not (args.flatpak or args.nix):
+        parser.error("app add needs --flatpak or --nix")
     if args.command in (None, "gui"):
         return gui(smoke_test=getattr(args, "smoke_test", False))
     return cli(args)

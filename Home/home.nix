@@ -4,6 +4,7 @@ in
 {
   imports = [
    ./packages.nix
+   ./packages-extra.nix
    ./settings.nix
    ./links.nix
    ./autostart.nix
