@@ -25,6 +25,23 @@ case "$action" in
     check_dir "${2:-}"
     exec nixos-rebuild switch --flake "$allowed#nixos"
     ;;
+  run-script)
+    # run-script <config-dir> <name>: a script the system build installed
+    # under /etc/nixos-scripts (Config/root-scripts.nix). Nothing outside
+    # that directory is ever run here.
+    check_dir "${2:-}"
+    name="${3:?script name}"
+    case "$name" in */*|.*|post-update-root) echo "bad script name" >&2; exit 2;; esac
+    script="/etc/nixos-scripts/$name"
+    if [ ! -e "$script" ]; then
+      echo "$name is not installed as a root script yet; tick \"As root\" and Apply first" >&2
+      exit 2
+    fi
+    case "$name" in
+      *.py) exec python3 "$script";;
+      *) exec bash "$script";;
+    esac
+    ;;
   flush)
     check_dir "${2:-}"
     nix-collect-garbage -d
@@ -58,6 +75,10 @@ case "$action" in
       echo "==> Running post-update scripts"
       as_user "$runner" || true
     fi
+    if [ -x /etc/nixos-scripts/post-update-root ]; then
+      echo "==> Running post-update scripts that need root"
+      /etc/nixos-scripts/post-update-root || true
+    fi
 
     if [ "$want_reboot" = 1 ] && kernel_changed; then
       echo "==> Kernel changed, rebooting"
@@ -65,7 +86,7 @@ case "$action" in
     fi
     ;;
   *)
-    echo "usage: nixos-updater-helper switch|flush [config-dir] | auto <user> <boot|switch> <reboot> <flatpaks>" >&2
+    echo "usage: nixos-updater-helper switch|flush [config-dir] | run-script <config-dir> <name> | auto <user> <boot|switch> <reboot> <flatpaks>" >&2
     exit 2
     ;;
 esac

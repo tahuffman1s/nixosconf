@@ -13,7 +13,8 @@ let
   # is reported but does not stop the others.
   entries = builtins.fromJSON (builtins.readFile ./scripts.json);
   file = e: ./scripts + "/${e.file}";
-  postUpdate = builtins.filter (e: e.script && (e.postUpdate or false)) entries;
+  # Scripts flagged "root" are handled by Config/root-scripts.nix instead.
+  postUpdate = builtins.filter (e: e.script && (e.postUpdate or false) && !(e.root or false)) entries;
   # Call the interpreter explicitly: a "#!/bin/bash" shebang does not resolve on NixOS.
   interpreter = e: { python = "${pkgs.python3}/bin/python3 "; bash = "${pkgs.bash}/bin/bash "; }.${e.kind or ""} or "";
   runner = pkgs.writeShellScript "nixos-post-update" ''

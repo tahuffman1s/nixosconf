@@ -12,8 +12,8 @@ GUI by default (Qt, follows the Plasma style). Subcommands for the terminal:
     nixos-updater push                 git push the config repo
     nixos-updater reboot
     nixos-updater unit add FILE [--user] [--disabled] | remove NAME | list
-    nixos-updater script add FILE... [--data] [--post-update] | remove NAME | run NAME | list
-    nixos-updater script post-update NAME on|off
+    nixos-updater script add FILE... [--data] [--post-update] [--root] | remove NAME | run NAME | list
+    nixos-updater script post-update NAME on|off | root NAME on|off
 """
 
 import argparse
@@ -452,7 +452,7 @@ def fix_shebang(dest):
     return False
 
 
-def add_script(path, data=False, post_update=False):
+def add_script(path, data=False, post_update=False, root=False):
     """Copy a script or companion file into Home/scripts/; returns the entry."""
     path = Path(path)
     SCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -464,7 +464,8 @@ def add_script(path, data=False, post_update=False):
         fix_shebang(dest)
     mode = dest.stat().st_mode
     dest.chmod((mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH) if is_script else (mode & ~0o111))
-    entry = {"file": path.name, "script": is_script, "kind": kind, "postUpdate": bool(post_update and is_script)}
+    entry = {"file": path.name, "script": is_script, "kind": kind,
+             "postUpdate": bool(post_update and is_script), "root": bool(root and is_script)}
     scripts = [s for s in load_json("scripts") if s["file"] != path.name] + [entry]
     scripts.sort(key=lambda s: s["file"])
     save_json("scripts", scripts)
@@ -485,38 +486,42 @@ def remove_script(name):
     return True
 
 
-def set_post_update(name, enabled):
+def set_script_flag(name, flag, enabled):
     scripts = load_json("scripts")
     found = False
     for s in scripts:
         if s["file"] == name:
-            s["postUpdate"] = bool(enabled and s["script"])
+            s[flag] = bool(enabled and s["script"])
             found = True
     if found:
         save_json("scripts", scripts)
     return found
 
 
-def post_update_step():
-    """Run every script flagged "After update", in name order. Uses the copy
-    the config installed in ~/.local/bin when it is there, otherwise the copy
-    in the repo, so this works before the first Apply too."""
+def set_post_update(name, enabled):
+    return set_script_flag(name, "postUpdate", enabled)
+
+
+def script_step(entry):
+    """One step running a script: as root through the polkit helper when the
+    script is flagged so, otherwise as you (installed copy if present, else
+    the repo copy, so it works before the first Apply too)."""
+    if entry.get("root"):
+        return (f'Running {entry["file"]} as root', root_cmd("run-script", entry["file"]))
+    installed = Path.home() / ".local" / "bin" / entry["file"]
+    run_installed = " ".join(f"'{a}'" for a in script_run_cmd(entry, installed))
+    run_repo = " ".join(f"'{a}'" for a in script_run_cmd(entry))
+    return (f'Running {entry["file"]}',
+            ["bash", "-c", f'if [ -e "{installed}" ]; then {run_installed}; else echo "(not installed yet, running the repo copy)"; {run_repo}; fi'])
+
+
+def post_update_steps():
+    """Steps for every script flagged "After update", in name order."""
     flagged = [s for s in load_json("scripts") if s["script"] and s.get("postUpdate")]
     if not flagged:
-        return ("Running post-update scripts",
-                lambda log: log("No scripts are ticked \"After update\" on the Scripts page."))
-    parts = ["status=0"]
-    for entry in flagged:
-        installed = Path.home() / ".local" / "bin" / entry["file"]
-        run_installed = " ".join(f"'{a}'" for a in script_run_cmd(entry, installed))
-        run_repo = " ".join(f"'{a}'" for a in script_run_cmd(entry))
-        parts.append(
-            f'echo "==> {entry["file"]}"; '
-            f'if [ -e "{installed}" ]; then {run_installed}; else echo "   (not installed yet, running the repo copy)"; {run_repo}; fi '
-            f'|| {{ echo "==> {entry["file"]} failed with exit code $?"; status=1; }}'
-        )
-    parts.append("exit $status")
-    return ("Running post-update scripts", ["bash", "-c", "\n".join(parts)])
+        return [("Running post-update scripts",
+                 lambda log: log("No scripts are ticked \"After update\" on the Scripts page."))]
+    return [script_step(e) for e in flagged]
 
 
 def commit_scripts(log):
@@ -543,11 +548,11 @@ def installed_script_path(name, scope):
 # Steps: each is ("title", callable(log)) or ("title", argv). Shared by CLI and GUI.
 
 
-def root_cmd(action):
+def root_cmd(action, *extra):
     """Run the privileged helper: sudo in a terminal, polkit otherwise."""
     if sys.stdin.isatty() and shutil.which("sudo"):
-        return ["sudo", str(HELPER), action, str(CONFIG_DIR)]
-    return ["pkexec", str(HELPER), action, str(CONFIG_DIR)]
+        return ["sudo", str(HELPER), action, str(CONFIG_DIR), *extra]
+    return ["pkexec", str(HELPER), action, str(CONFIG_DIR), *extra]
 
 
 def step_sync(log, dry_run=False):
@@ -586,12 +591,12 @@ def update_steps(sync=True):
     steps.append(("Committing flake.lock", lambda log: log(git_commit([CONFIG_DIR / "flake.lock"], "Update flake inputs"))))
     steps.append(("Building and switching to the new system", root_cmd("switch")))
     steps.append(("Updating Flatpaks", ["flatpak", "update", "--user", "-y", "--noninteractive"]))
-    steps.append(post_update_step())
+    steps += post_update_steps()
     return steps
 
 
 def apply_steps():
-    return [("Building and switching to the new system", root_cmd("switch")), post_update_step()]
+    return [("Building and switching to the new system", root_cmd("switch"))] + post_update_steps()
 
 
 def flush_steps():
@@ -775,18 +780,19 @@ def cli(args):
     if args.command == "script":
         if args.script_command == "list":
             for s in load_json("scripts"):
-                print(f'{s["file"]:32} {s["kind"]:7} {"on PATH" if s["script"] else "companion file":15} '
-                      f'{"runs after update" if s.get("postUpdate") else ""}')
+                flags = [f for f, on in (("after update", s.get("postUpdate")), ("as root", s.get("root"))) if on]
+                print(f'{s["file"]:32} {s["kind"]:7} {"on PATH" if s["script"] else "companion file":15} {", ".join(flags)}')
             return 0
         if args.script_command == "add":
             for f in args.files:
-                entry = add_script(f, data=args.data, post_update=args.post_update)
+                entry = add_script(f, data=args.data, post_update=args.post_update, root=args.root)
                 print(f'Added {entry["file"]} ({entry["kind"]}{", on PATH after apply" if entry["script"] else ""}'
-                      f'{", runs after update" if entry["postUpdate"] else ""})')
+                      f'{", runs after update" if entry["postUpdate"] else ""}{", as root" if entry["root"] else ""})')
             commit_scripts(echo)
             return 0
-        if args.script_command == "post-update":
-            if not set_post_update(args.name, args.state == "on"):
+        if args.script_command in ("post-update", "root"):
+            flag = "postUpdate" if args.script_command == "post-update" else "root"
+            if not set_script_flag(args.name, flag, args.state == "on"):
                 print(f"{args.name} is not in the config", file=sys.stderr)
                 return 1
             commit_scripts(echo)
@@ -802,7 +808,9 @@ def cli(args):
             if not entry:
                 print(f"{args.name} is not in the config", file=sys.stderr)
                 return 1
-            return subprocess.run(script_run_cmd(entry), check=False).returncode
+            title, action = script_step(entry)
+            print(f"==> {title}", flush=True)
+            return subprocess.run(action, check=False).returncode
     return 0
 
 
@@ -1330,10 +1338,11 @@ def gui(smoke_test=False):
         subtitle = ("Bash or Python scripts and the files they need. Kept in Home/scripts/, installed to "
                     "~/.local/share/nixos-scripts/, and scripts also go on your PATH via ~/.local/bin. A script finds "
                     "its companion files in its own directory. Tick \"After update\" to run a script at the end of "
-                    "every Update, including unattended ones.")
+                    "every Update, including unattended ones, and \"As root\" to run it with root rights "
+                    "(through the same password prompt as the rebuild).")
 
         def body(self):
-            self.table = DropTable(["File", "Kind", "On PATH", "After update"], (), self.add_files,
+            self.table = DropTable(["File", "Kind", "On PATH", "After update", "As root"], (), self.add_files,
                                    "Drop scripts and their files here")
             self.table.itemChanged.connect(self.toggled)
             self.layout_.addWidget(self.table, 1)
@@ -1356,20 +1365,22 @@ def gui(smoke_test=False):
                 self.table.setItem(r, 0, QTableWidgetItem(icon(ic), s["file"]))
                 self.table.setItem(r, 1, QTableWidgetItem(s["kind"]))
                 self.table.setItem(r, 2, QTableWidgetItem("yes" if s["script"] else "companion file"))
-                after = QTableWidgetItem()
-                if s["script"]:
-                    after.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
-                    after.setCheckState(Qt.CheckState.Checked if s.get("postUpdate") else Qt.CheckState.Unchecked)
-                else:
-                    after.setFlags(Qt.ItemFlag.ItemIsSelectable)
-                    after.setText("—")
-                self.table.setItem(r, 3, after)
+                for col, flag in ((3, "postUpdate"), (4, "root")):
+                    cell = QTableWidgetItem()
+                    if s["script"]:
+                        cell.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+                        cell.setCheckState(Qt.CheckState.Checked if s.get(flag) else Qt.CheckState.Unchecked)
+                    else:
+                        cell.setFlags(Qt.ItemFlag.ItemIsSelectable)
+                        cell.setText("—")
+                    self.table.setItem(r, col, cell)
             self.table.resizeColumnsToContents()
             self.table.blockSignals(False)
 
         def toggled(self, item):
-            if item.column() == 3 and item.row() < len(self.rows) and self.rows[item.row()]["script"]:
-                set_post_update(self.rows[item.row()]["file"], item.checkState() == Qt.CheckState.Checked)
+            flags = {3: "postUpdate", 4: "root"}
+            if item.column() in flags and item.row() < len(self.rows) and self.rows[item.row()]["script"]:
+                set_script_flag(self.rows[item.row()]["file"], flags[item.column()], item.checkState() == Qt.CheckState.Checked)
 
         def add_files(self, paths, data=False):
             for path in paths:
@@ -1398,10 +1409,10 @@ def gui(smoke_test=False):
             if not s["script"]:
                 QMessageBox.information(self, "Run", f'{s["file"]} is a companion file, not a script.')
                 return
-            self.window.run([(f'Running {s["file"]}', script_run_cmd(s))], f'{s["file"]} finished.')
+            self.window.run([script_step(s)], f'{s["file"]} finished.')
 
         def run_post_update(self):
-            self.window.run([post_update_step()], "Post-update scripts finished.")
+            self.window.run(post_update_steps(), "Post-update scripts finished.")
 
         def edit(self):
             s = self.selected()
@@ -1782,9 +1793,12 @@ def main():
     sa.add_argument("files", nargs="+")
     sa.add_argument("--data", action="store_true", help="add as companion files, not executable scripts")
     sa.add_argument("--post-update", action="store_true", help="run the script after every update")
-    pu = script.add_parser("post-update", help="turn running a script after updates on or off")
-    pu.add_argument("name")
-    pu.add_argument("state", choices=["on", "off"])
+    sa.add_argument("--root", action="store_true", help="run the script as root")
+    for flag, help_text in (("post-update", "turn running a script after updates on or off"),
+                            ("root", "turn running a script as root on or off")):
+        fp = script.add_parser(flag, help=help_text)
+        fp.add_argument("name")
+        fp.add_argument("state", choices=["on", "off"])
     script.add_parser("remove", help="remove a script or file from the config").add_argument("name")
     script.add_parser("run", help="run a script from the config").add_argument("name")
     script.add_parser("list", help="list scripts and files")
