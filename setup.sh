@@ -16,7 +16,10 @@
 #   NIXOSCONF_DIR               where to clone             (default: ~/nixosconf)
 #   NIXOSCONF_REPO              git URL of the config repo
 #   NIXOSCONF_USER              account to set up          (default: the sudo user)
-#   NIXOSCONF_GPU               amd | nvidia | intel       (default: detected, then asked)
+#   NIXOSCONF_GPU               amd | nvidia | intel | hybrid  (default: detected, then asked)
+#   NIXOSCONF_IGPU              intel | amd                hybrid: the iGPU
+#   NIXOSCONF_PRIME             offload | sync             hybrid: how the NVIDIA GPU is used
+#   NIXOSCONF_IGPU_BUSID, NIXOSCONF_NVIDIA_BUSID   hybrid: PCI:bus:device:function
 #   NIXOSCONF_CPU               amd | intel                (default: detected, then asked)
 #   NIXOSCONF_LAPTOP            1 | 0                      (default: detected, then asked)
 #   NIXOSCONF_NO_UI=1           take the detected/overridden hardware without asking
@@ -193,20 +196,42 @@ confirm() {
 # Hardware detection. hardware.json tells Config/hardware-profile.nix which
 # GPU driver to use and whether to turn on the laptop power bits.
 
-detect_gpu() {
-  local f vendors=" "
-  for f in /sys/class/drm/card*/device/vendor /sys/bus/pci/devices/*/vendor; do
-    [ -r "$f" ] || continue
-    case "$f" in /sys/bus/pci/*) [ "$(cat "${f%/vendor}/class" 2>/dev/null)" = 0x030000 ] || continue ;; esac
-    vendors="$vendors$(cat "$f") "
+# Display adapters (VGA or 3D controller) as "vendor address" lines, e.g.
+# "nvidia 0000:01:00.0".
+list_gpus() {
+  local d cls vendor
+  for d in /sys/bus/pci/devices/*; do
+    cls="$(cat "$d/class" 2>/dev/null || true)"
+    case "$cls" in 0x0300*|0x0302*|0x0380*) ;; *) continue ;; esac
+    case "$(cat "$d/vendor" 2>/dev/null)" in
+      0x10de) vendor=nvidia ;; 0x1002) vendor=amd ;; 0x8086) vendor=intel ;; *) continue ;;
+    esac
+    printf '%s %s\n' "$vendor" "${d##*/}"
   done
-  case "$vendors" in
-    *" 0x10de "*) echo nvidia ;;   # a discrete NVIDIA card wins over an iGPU
-    *" 0x1002 "*) echo amd ;;
-    *" 0x8086 "*) echo intel ;;
-    *) echo amd ;;
-  esac
 }
+gpu_list="$(list_gpus)"
+has_gpu() { printf '%s\n' "$gpu_list" | grep -q "^$1 "; }
+
+# "0000:01:00.0" -> "PCI:1:0:0" (bus:device:function in decimal, as the
+# NVIDIA driver wants it).
+bus_id() {
+  local addr="$1" bus dev fn
+  [ -n "$addr" ] || return 0
+  addr="${addr#*:}"; bus="${addr%%:*}"; addr="${addr#*:}"; dev="${addr%%.*}"; fn="${addr#*.}"
+  printf 'PCI:%d:%d:%d\n' "0x$bus" "0x$dev" "0x$fn" 2>/dev/null || true
+}
+gpu_bus_id() { bus_id "$(printf '%s\n' "$gpu_list" | awk -v v="$1" '$1 == v { print $2; exit }')"; }
+
+detect_gpu() {
+  if has_gpu nvidia && { has_gpu intel || has_gpu amd; }; then
+    echo hybrid                    # an iGPU next to a GeForce: PRIME
+  elif has_gpu nvidia; then echo nvidia
+  elif has_gpu amd; then echo amd
+  elif has_gpu intel; then echo intel
+  else echo amd
+  fi
+}
+detect_igpu() { if has_gpu intel; then echo intel; else echo amd; fi; }
 
 detect_cpu() {
   case "$(grep -m1 '^vendor_id' /proc/cpuinfo 2>/dev/null)" in
@@ -234,14 +259,42 @@ GPU="${NIXOSCONF_GPU:-$(read_hw gpu)}";       [ -n "$GPU" ] || GPU="$(detect_gpu
 CPU="${NIXOSCONF_CPU:-$(read_hw cpu)}";       [ -n "$CPU" ] || CPU="$(detect_cpu)"
 LAPTOP="${NIXOSCONF_LAPTOP:-$(read_hw laptop)}"
 case "$LAPTOP" in true|1) LAPTOP=1 ;; false|0) LAPTOP=0 ;; *) LAPTOP="$(detect_laptop)" ;; esac
-case "$GPU" in amd|nvidia|intel) ;; *) die "NIXOSCONF_GPU must be amd, nvidia or intel (got '$GPU')" ;; esac
+IGPU="${NIXOSCONF_IGPU:-$(read_hw igpu)}";    [ -n "$IGPU" ] || IGPU="$(detect_igpu)"
+PRIME="${NIXOSCONF_PRIME:-$(read_hw prime)}"; [ -n "$PRIME" ] || PRIME=offload
+read_busid() { # igpu|nvidia -> value from an existing hardware.json
+  [ -f "$DIR/hardware.json" ] || return 0
+  sed -n "s/^[[:space:]]*\"$1\"[[:space:]]*:[[:space:]]*\"\(PCI:[0-9:@]*\)\".*/\1/p" "$DIR/hardware.json" | head -1
+}
+IGPU_BUSID="${NIXOSCONF_IGPU_BUSID:-$(gpu_bus_id "$IGPU")}";    [ -n "$IGPU_BUSID" ] || IGPU_BUSID="$(read_busid igpu)"
+NVIDIA_BUSID="${NIXOSCONF_NVIDIA_BUSID:-$(gpu_bus_id nvidia)}"; [ -n "$NVIDIA_BUSID" ] || NVIDIA_BUSID="$(read_busid nvidia)"
+case "$GPU" in amd|nvidia|intel|hybrid) ;; *) die "NIXOSCONF_GPU must be amd, nvidia, intel or hybrid (got '$GPU')" ;; esac
 case "$CPU" in amd|intel) ;; *) die "NIXOSCONF_CPU must be amd or intel (got '$CPU')" ;; esac
+case "$IGPU" in amd|intel) ;; *) die "NIXOSCONF_IGPU must be intel or amd (got '$IGPU')" ;; esac
+case "$PRIME" in offload|sync) ;; *) die "NIXOSCONF_PRIME must be offload or sync (got '$PRIME')" ;; esac
+
+# One line describing the GPU choice, for the summary boxes.
+gpu_desc() {
+  if [ "$GPU" = hybrid ]; then
+    echo "hybrid ($IGPU iGPU $IGPU_BUSID + NVIDIA $NVIDIA_BUSID, PRIME $PRIME)"
+  else
+    echo "$GPU"
+  fi
+}
 
 # No commas in these: gum's --selected takes a comma-separated list.
 gpu_opts=(
   "amd     Radeon: Mesa + amdgpu early KMS + overclocking + LACT"
-  "nvidia  GeForce: proprietary driver with NVIDIA's open kernel modules (Turing or newer)"
+  "nvidia  GeForce only: proprietary driver with NVIDIA's open kernel modules (Turing or newer)"
   "intel   Intel graphics: Mesa + media drivers + OpenCL"
+  "hybrid  Laptop with an Intel/AMD iGPU and a GeForce: iGPU drives the screen + NVIDIA through PRIME"
+)
+igpu_opts=(
+  "intel   Intel iGPU (Core / Core Ultra)"
+  "amd     AMD iGPU (Ryzen APU)"
+)
+prime_opts=(
+  "offload  Battery first: NVIDIA sleeps until a program uses it (Steam always does; nvidia-offload <app> for others)"
+  "sync     Performance first: NVIDIA renders everything; the iGPU only drives the panel"
 )
 cpu_opts=(
   "amd     Ryzen / Threadripper microcode"
@@ -249,15 +302,43 @@ cpu_opts=(
 )
 opt_for() { local k="$1"; shift; for o in "$@"; do [ "${o%% *}" = "$k" ] && { printf '%s\n' "$o"; return; }; done; }
 
+# ask_text "prompt" "default" -> prints the answer
+ask_text() {
+  local a=""
+  if [ -n "$GUM" ]; then
+    a="$("$GUM" input --header "$1" --value "$2" --placeholder "PCI:1:0:0" </dev/tty 2>/dev/tty)" || a=""
+  else
+    read -r -p "$1 [$2]: " a </dev/tty || a=""
+  fi
+  printf '%s\n' "${a:-$2}"
+}
+
 box "nixosconf setup" \
   "Account   $USER_NAME ($FULL_NAME)" \
   "Config    $DIR  (branch $BRANCH)" \
-  "Detected  GPU: $GPU   CPU: $CPU   laptop: $([ "$LAPTOP" = 1 ] && echo yes || echo no)"
+  "Detected  GPU: $(gpu_desc)   CPU: $CPU   laptop: $([ "$LAPTOP" = 1 ] && echo yes || echo no)"
 
 if [ "$HAVE_TTY" = 1 ] && [ "$NO_UI" != 1 ]; then
-  pick="$(choose "Graphics card (on a hybrid laptop pick the GPU that drives the screen)" \
-                 "$(opt_for "$GPU" "${gpu_opts[@]}")" "${gpu_opts[@]}")"
+  pick="$(choose "Graphics" "$(opt_for "$GPU" "${gpu_opts[@]}")" "${gpu_opts[@]}")"
   GPU="${pick%% *}"
+  if [ "$GPU" = hybrid ]; then
+    pick="$(choose "Which iGPU is next to the GeForce?" "$(opt_for "$IGPU" "${igpu_opts[@]}")" "${igpu_opts[@]}")"
+    IGPU="${pick%% *}"
+    [ -n "$IGPU_BUSID" ] && [ "$IGPU" = "$(detect_igpu)" ] || IGPU_BUSID="$(gpu_bus_id "$IGPU")"
+    pick="$(choose "How should the NVIDIA GPU be used?" "$(opt_for "$PRIME" "${prime_opts[@]}")" "${prime_opts[@]}")"
+    PRIME="${pick%% *}"
+    if [ -z "$IGPU_BUSID" ] || [ -z "$NVIDIA_BUSID" ]; then
+      {
+        echo; echo "PRIME needs the PCI address of each GPU. Display adapters on this machine:"
+        printf '%s\n' "$gpu_list" | while read -r v a; do
+          if [ -n "$a" ]; then printf '  %-7s %s  -> %s\n' "$v" "$a" "$(bus_id "$a")"; else echo "  (none found; check lspci)"; fi
+        done
+        echo
+      } >/dev/tty
+    fi
+    IGPU_BUSID="$(ask_text "$IGPU iGPU bus ID" "$IGPU_BUSID")"
+    NVIDIA_BUSID="$(ask_text "NVIDIA GPU bus ID" "$NVIDIA_BUSID")"
+  fi
   pick="$(choose "Processor" "$(opt_for "$CPU" "${cpu_opts[@]}")" "${cpu_opts[@]}")"
   CPU="${pick%% *}"
   if confirm "Is this a laptop? (power profiles, lid switch, Wi-Fi power saving)" "$([ "$LAPTOP" = 1 ] && echo yes || echo no)"; then
@@ -266,7 +347,7 @@ if [ "$HAVE_TTY" = 1 ] && [ "$NO_UI" != 1 ]; then
     LAPTOP=0
   fi
   box "Ready to install" \
-    "GPU       $GPU" \
+    "GPU       $(gpu_desc)" \
     "CPU       $CPU" \
     "Laptop    $([ "$LAPTOP" = 1 ] && echo yes || echo no)" \
     "" \
@@ -274,7 +355,10 @@ if [ "$HAVE_TTY" = 1 ] && [ "$NO_UI" != 1 ]; then
     "switch (downloads several GB), install the Flatpaks, reboot."
   confirm "Start now?" yes || { say "Nothing changed."; exit 0; }
 else
-  say "No terminal for the setup UI; using GPU=$GPU CPU=$CPU laptop=$LAPTOP (override with NIXOSCONF_GPU/CPU/LAPTOP)"
+  say "No terminal for the setup UI; using GPU=$(gpu_desc) CPU=$CPU laptop=$LAPTOP (override with NIXOSCONF_GPU/CPU/LAPTOP)"
+fi
+if [ "$GPU" = hybrid ] && { [ -z "$IGPU_BUSID" ] || [ -z "$NVIDIA_BUSID" ]; }; then
+  die "A hybrid GPU needs both PCI bus IDs. Set NIXOSCONF_IGPU_BUSID and NIXOSCONF_NVIDIA_BUSID (PCI:bus:device:function, from lspci) or pick a single GPU."
 fi
 
 # ---------------------------------------------------------------------------
@@ -310,14 +394,30 @@ write_as_user "$DIR/user.nix" <<NIX
 }
 NIX
 
-say "Writing hardware.json (gpu=$GPU cpu=$CPU laptop=$LAPTOP)"
-write_as_user "$DIR/hardware.json" <<JSON
+say "Writing hardware.json (gpu=$(gpu_desc) cpu=$CPU laptop=$LAPTOP)"
+if [ "$GPU" = hybrid ]; then
+  write_as_user "$DIR/hardware.json" <<JSON
+{
+  "cpu": "$CPU",
+  "gpu": "hybrid",
+  "igpu": "$IGPU",
+  "prime": "$PRIME",
+  "busIds": {
+    "igpu": "$IGPU_BUSID",
+    "nvidia": "$NVIDIA_BUSID"
+  },
+  "laptop": $([ "$LAPTOP" = 1 ] && echo true || echo false)
+}
+JSON
+else
+  write_as_user "$DIR/hardware.json" <<JSON
 {
   "cpu": "$CPU",
   "gpu": "$GPU",
   "laptop": $([ "$LAPTOP" = 1 ] && echo true || echo false)
 }
 JSON
+fi
 
 # ---------------------------------------------------------------------------
 # 3. hardware-configuration.nix and drives.nix for this machine
@@ -467,7 +567,7 @@ fi
 say "Done."
 box "All set" \
   "Config    $DIR  (branch $BRANCH), reachable as $LINK" \
-  "Hardware  GPU: $GPU   CPU: $CPU   laptop: $([ "$LAPTOP" = 1 ] && echo yes || echo no)" \
+  "Hardware  GPU: $(gpu_desc)   CPU: $CPU   laptop: $([ "$LAPTOP" = 1 ] && echo yes || echo no)" \
   "Update    nixos-updater, or the NixOS Updater app in the start menu" \
   "Rebuild   sudo nixos-rebuild switch --flake $LINK"
 

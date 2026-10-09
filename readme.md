@@ -15,8 +15,11 @@ curl -fsSL https://raw.githubusercontent.com/tahuffman1s/nixosconf/main/setup.sh
 That is the only step after a plain NixOS install. The script builds the
 config for the account that ran `sudo`. It opens a small terminal UI (gum,
 fetched from nixpkgs) that asks three things, with what it detected already
-selected: the graphics card, the processor, and whether the machine is a
-laptop. Enter through the questions keeps the detected answers. Then it clones
+selected: the graphics card (Radeon, GeForce, Intel, or a hybrid laptop with
+an iGPU next to a GeForce), the processor, and whether the machine is a
+laptop. A hybrid also asks how to use the NVIDIA GPU (PRIME offload or sync)
+and confirms the two PCI bus IDs it found. Enter through the questions keeps
+the detected answers. Then it clones
 this repo into `~/nixosconf` (owned by you), points `/etc/nixos` at it, writes
 `user.nix` with your account name and `hardware.json` with those answers,
 generates `hardware-configuration.nix`, finds the GD1 and GD2 drives for
@@ -30,8 +33,10 @@ the clone asks the hardware questions again (defaulting to the current
 the reboot.
 
 Without a terminal, or with `NIXOSCONF_NO_UI=1`, it takes the detected
-hardware without asking; `NIXOSCONF_GPU=amd|nvidia|intel`,
-`NIXOSCONF_CPU=amd|intel` and `NIXOSCONF_LAPTOP=1|0` override detection.
+hardware without asking; `NIXOSCONF_GPU=amd|nvidia|intel|hybrid`,
+`NIXOSCONF_CPU=amd|intel`, `NIXOSCONF_LAPTOP=1|0`, and for a hybrid
+`NIXOSCONF_IGPU=intel|amd`, `NIXOSCONF_PRIME=offload|sync`,
+`NIXOSCONF_IGPU_BUSID` and `NIXOSCONF_NVIDIA_BUSID` override detection.
 
 ### Hardware profiles
 
@@ -42,6 +47,7 @@ hardware without asking; `NIXOSCONF_GPU=amd|nvidia|intel`,
 | GPU `amd` | Mesa, amdgpu in the initrd (early KMS), overdrive for clock and power limits, LACT |
 | GPU `nvidia` | The proprietary NVIDIA driver (latest branch) with NVIDIA's open kernel modules, kernel modesetting for Wayland, nvidia-settings, VA-API through nvidia-vaapi-driver, Ozone/Wayland for Chromium apps, nvtop; the kernel drops from `linuxPackages_latest` to the default kernel so the modules build. Needs a Turing (RTX 20 / GTX 16) or newer card. |
 | GPU `intel` | Mesa, i915 in the initrd, intel-media-driver and intel-vaapi-driver (VA-API), OpenCL runtime, oneVPL, intel-gpu-tools |
+| GPU `hybrid` | An Intel or AMD iGPU (`igpu`) driving the screen plus a GeForce through NVIDIA PRIME, with the same NVIDIA driver setup as above and the iGPU's own drivers. `prime: offload` (default) leaves the NVIDIA GPU powered off until a program uses it: Steam and everything it launches always run on it, anything else with `nvidia-offload <command>`; fine-grained power management turns the card off in between. `prime: sync` makes the NVIDIA GPU render everything, for a laptop that mostly lives on the charger. Both need the PCI bus IDs in `busIds`, which setup.sh reads from `/sys/bus/pci` (`lspci` shows them as `01:00.0`, written `PCI:1:0:0`). |
 | CPU `amd` / `intel` | The matching microcode updates |
 | Laptop | power-profiles-daemon (Plasma's battery widget), thermald on Intel, Wi-Fi power saving, lid closes to suspend, power key suspends (long press powers off), rotation sensors, brightnessctl and powertop, zram swappiness back to 60, NVIDIA runtime power management when the GPU is NVIDIA |
 
@@ -102,7 +108,7 @@ Terminal equivalents: `nixos-updater unit add|remove|list`,
 | `flake.nix` | Inputs and the `nixos` system definition |
 | `user.nix` | The account the config is built for (written by setup.sh) |
 | `drives.nix` | GD1 and GD2 mounts (written by setup.sh) |
-| `hardware.json` | GPU, CPU and laptop choices for `Config/hardware-profile.nix` (written by setup.sh) |
+| `hardware.json` | GPU (including hybrid iGPU + NVIDIA with PRIME mode and bus IDs), CPU and laptop choices for `Config/hardware-profile.nix` (written by setup.sh) |
 | `configuration.nix` | System module list |
 | `Config/` | Boot, hardware profile, gaming tuning, networking, locale, services, printing, users, nix settings |
 | `Apps/` | Per-app modules (Steam, kitty, fish, VSCodium, Zen, the updater app, ...) |
