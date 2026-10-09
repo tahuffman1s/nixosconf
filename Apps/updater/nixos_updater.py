@@ -12,7 +12,8 @@ GUI by default (Qt, follows the Plasma style). Subcommands for the terminal:
     nixos-updater push                 git push the config repo
     nixos-updater reboot
     nixos-updater unit add FILE [--user] [--disabled] | remove NAME | list
-    nixos-updater script add FILE... [--data] | remove NAME | run NAME | list
+    nixos-updater script add FILE... [--data] [--post-update] | remove NAME | run NAME | list
+    nixos-updater script post-update NAME on|off
 """
 
 import argparse
@@ -54,6 +55,7 @@ UNITS_DIR = CONFIG_DIR / "Config" / "units"
 SCRIPTS_DIR = CONFIG_DIR / "Home" / "scripts"
 UNIT_SUFFIXES = (".service", ".timer", ".socket", ".path", ".target", ".mount", ".automount")
 SCRIPT_SUFFIXES = (".sh", ".bash", ".py")
+POST_UPDATE_RUNNER = Path.home() / ".local" / "share" / "nixos-scripts" / "post-update"
 
 # Keys under [Context] in a flatpak override file hold ';'-separated lists.
 LIST_KEYS = {"shared", "sockets", "devices", "features", "filesystems", "persistent"}
@@ -420,7 +422,7 @@ def script_kind(path):
     return "file"
 
 
-def add_script(path, data=False):
+def add_script(path, data=False, post_update=False):
     """Copy a script or companion file into Home/scripts/; returns the entry."""
     path = Path(path)
     SCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -430,7 +432,7 @@ def add_script(path, data=False):
     is_script = kind != "file"
     mode = dest.stat().st_mode
     dest.chmod((mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH) if is_script else (mode & ~0o111))
-    entry = {"file": path.name, "script": is_script, "kind": kind}
+    entry = {"file": path.name, "script": is_script, "kind": kind, "postUpdate": bool(post_update and is_script)}
     scripts = [s for s in load_json("scripts") if s["file"] != path.name] + [entry]
     scripts.sort(key=lambda s: s["file"])
     save_json("scripts", scripts)
@@ -448,6 +450,24 @@ def remove_script(name):
     except OSError:
         pass
     return True
+
+
+def set_post_update(name, enabled):
+    scripts = load_json("scripts")
+    found = False
+    for s in scripts:
+        if s["file"] == name:
+            s["postUpdate"] = bool(enabled and s["script"])
+            found = True
+    if found:
+        save_json("scripts", scripts)
+    return found
+
+
+def post_update_step():
+    """Run the post-update runner the config installed, if there is one."""
+    return ("Running post-update scripts",
+            ["bash", "-c", f'r="{POST_UPDATE_RUNNER}"; if [ -x "$r" ]; then exec "$r"; else echo "No post-update scripts configured."; fi'])
 
 
 def commit_scripts(log):
@@ -516,6 +536,7 @@ def update_steps(sync=True):
     steps.append(("Committing flake.lock", lambda log: log(git_commit([CONFIG_DIR / "flake.lock"], "Update flake inputs"))))
     steps.append(("Building and switching to the new system", root_cmd("switch")))
     steps.append(("Updating Flatpaks", ["flatpak", "update", "--user", "-y", "--noninteractive"]))
+    steps.append(post_update_step())
     return steps
 
 
@@ -614,12 +635,20 @@ def cli(args):
     if args.command == "script":
         if args.script_command == "list":
             for s in load_json("scripts"):
-                print(f'{s["file"]:32} {s["kind"]:7} {"on PATH" if s["script"] else "companion file"}')
+                print(f'{s["file"]:32} {s["kind"]:7} {"on PATH" if s["script"] else "companion file":15} '
+                      f'{"runs after update" if s.get("postUpdate") else ""}')
             return 0
         if args.script_command == "add":
             for f in args.files:
-                entry = add_script(f, data=args.data)
-                print(f'Added {entry["file"]} ({entry["kind"]}{", on PATH after apply" if entry["script"] else ""})')
+                entry = add_script(f, data=args.data, post_update=args.post_update)
+                print(f'Added {entry["file"]} ({entry["kind"]}{", on PATH after apply" if entry["script"] else ""}'
+                      f'{", runs after update" if entry["postUpdate"] else ""})')
+            commit_scripts(echo)
+            return 0
+        if args.script_command == "post-update":
+            if not set_post_update(args.name, args.state == "on"):
+                print(f"{args.name} is not in the config", file=sys.stderr)
+                return 1
             commit_scripts(echo)
             return 0
         if args.script_command == "remove":
@@ -1158,11 +1187,13 @@ def gui(smoke_test=False):
         title = "Scripts"
         subtitle = ("Bash or Python scripts and the files they need. Kept in Home/scripts/, installed to "
                     "~/.local/share/nixos-scripts/, and scripts also go on your PATH via ~/.local/bin. A script finds "
-                    "its companion files in its own directory.")
+                    "its companion files in its own directory. Tick \"After update\" to run a script at the end of "
+                    "every Update, including unattended ones.")
 
         def body(self):
-            self.table = DropTable(["File", "Kind", "On PATH"], (), self.add_files,
+            self.table = DropTable(["File", "Kind", "On PATH", "After update"], (), self.add_files,
                                    "Drop scripts and their files here")
+            self.table.itemChanged.connect(self.toggled)
             self.layout_.addWidget(self.table, 1)
             self.actions(button("Add script…", ["list-add"], lambda: self.add_dialog(False)),
                          button("Add companion file…", ["document-new"], lambda: self.add_dialog(True)),
@@ -1173,6 +1204,7 @@ def gui(smoke_test=False):
 
         def refresh(self):
             self.rows = load_json("scripts")
+            self.table.blockSignals(True)
             self.table.setRowCount(0)
             for s in self.rows:
                 r = self.table.rowCount()
@@ -1181,7 +1213,20 @@ def gui(smoke_test=False):
                 self.table.setItem(r, 0, QTableWidgetItem(icon(ic), s["file"]))
                 self.table.setItem(r, 1, QTableWidgetItem(s["kind"]))
                 self.table.setItem(r, 2, QTableWidgetItem("yes" if s["script"] else "companion file"))
+                after = QTableWidgetItem()
+                if s["script"]:
+                    after.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+                    after.setCheckState(Qt.CheckState.Checked if s.get("postUpdate") else Qt.CheckState.Unchecked)
+                else:
+                    after.setFlags(Qt.ItemFlag.ItemIsSelectable)
+                    after.setText("—")
+                self.table.setItem(r, 3, after)
             self.table.resizeColumnsToContents()
+            self.table.blockSignals(False)
+
+        def toggled(self, item):
+            if item.column() == 3 and item.row() < len(self.rows) and self.rows[item.row()]["script"]:
+                set_post_update(self.rows[item.row()]["file"], item.checkState() == Qt.CheckState.Checked)
 
         def add_files(self, paths, data=False):
             for path in paths:
@@ -1541,6 +1586,10 @@ def main():
     sa = script.add_parser("add", help="copy scripts (or companion files with --data) into the config")
     sa.add_argument("files", nargs="+")
     sa.add_argument("--data", action="store_true", help="add as companion files, not executable scripts")
+    sa.add_argument("--post-update", action="store_true", help="run the script after every update")
+    pu = script.add_parser("post-update", help="turn running a script after updates on or off")
+    pu.add_argument("name")
+    pu.add_argument("state", choices=["on", "off"])
     script.add_parser("remove", help="remove a script or file from the config").add_argument("name")
     script.add_parser("run", help="run a script from the config").add_argument("name")
     script.add_parser("list", help="list scripts and files")

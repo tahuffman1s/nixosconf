@@ -53,6 +53,12 @@ case "$action" in
       as_user flatpak update --user -y --noninteractive || true
     fi
 
+    runner="$home/.local/share/nixos-scripts/post-update"
+    if [ -x "$runner" ]; then
+      echo "==> Running post-update scripts"
+      as_user "$runner" || true
+    fi
+
     if [ "$want_reboot" = 1 ] && kernel_changed; then
       echo "==> Kernel changed, rebooting"
       systemctl reboot
