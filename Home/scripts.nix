@@ -14,11 +14,13 @@ let
   entries = builtins.fromJSON (builtins.readFile ./scripts.json);
   file = e: ./scripts + "/${e.file}";
   postUpdate = builtins.filter (e: e.script && (e.postUpdate or false)) entries;
+  # Call the interpreter explicitly: a "#!/bin/bash" shebang does not resolve on NixOS.
+  interpreter = e: { python = "${pkgs.python3}/bin/python3 "; bash = "${pkgs.bash}/bin/bash "; }.${e.kind or ""} or "";
   runner = pkgs.writeShellScript "nixos-post-update" ''
     status=0
     ${lib.concatMapStringsSep "\n" (e: ''
       echo "==> ${e.file}"
-      "$HOME/.local/bin/${e.file}" || { echo "==> ${e.file} failed with exit code $?"; status=1; }
+      ${interpreter e}"$HOME/.local/bin/${e.file}" || { echo "==> ${e.file} failed with exit code $?"; status=1; }
     '') postUpdate}
     ${lib.optionalString (postUpdate == [ ]) ''echo "No post-update scripts configured."''}
     exit $status

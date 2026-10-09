@@ -5,6 +5,10 @@ in
   nix.settings.experimental-features = [ "nix-command" "flakes" ];
   nixpkgs.config.allowUnfree = true;
 
+  # Let scripts written for other distros run as-is: /bin/bash, /usr/bin/env
+  # python3 and friends resolve to whatever is on PATH.
+  services.envfs.enable = true;
+
   # /etc/nixos is a symlink to the user's checkout. Root runs nixos-rebuild
   # (and the updater app runs it through polkit), and nix refuses to read a git repo
   # owned by someone else unless it is listed here.

@@ -432,6 +432,26 @@ def script_kind(path):
     return "file"
 
 
+SHEBANGS = {
+    re.compile(rb"^#!\s*/(usr/)?bin/(bash|sh)\b.*$", re.M): b"#!/usr/bin/env bash",
+    re.compile(rb"^#!\s*/(usr/)?bin/python3?\b.*$", re.M): b"#!/usr/bin/env python3",
+}
+
+
+def fix_shebang(dest):
+    """NixOS has no /bin/bash or /usr/bin/python3; point the shebang at env."""
+    try:
+        data = dest.read_bytes()
+    except OSError:
+        return False
+    first, nl, rest = data.partition(b"\n")
+    for pattern, replacement in SHEBANGS.items():
+        if pattern.match(first) and first.strip() != replacement:
+            dest.write_bytes(replacement + nl + rest)
+            return True
+    return False
+
+
 def add_script(path, data=False, post_update=False):
     """Copy a script or companion file into Home/scripts/; returns the entry."""
     path = Path(path)
@@ -440,6 +460,8 @@ def add_script(path, data=False, post_update=False):
     shutil.copyfile(path, dest)
     kind = "file" if data else script_kind(path)
     is_script = kind != "file"
+    if is_script:
+        fix_shebang(dest)
     mode = dest.stat().st_mode
     dest.chmod((mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH) if is_script else (mode & ~0o111))
     entry = {"file": path.name, "script": is_script, "kind": kind, "postUpdate": bool(post_update and is_script)}
@@ -486,10 +508,11 @@ def post_update_step():
     parts = ["status=0"]
     for entry in flagged:
         installed = Path.home() / ".local" / "bin" / entry["file"]
-        fallback = " ".join(f"'{a}'" for a in script_run_cmd(entry))
+        run_installed = " ".join(f"'{a}'" for a in script_run_cmd(entry, installed))
+        run_repo = " ".join(f"'{a}'" for a in script_run_cmd(entry))
         parts.append(
             f'echo "==> {entry["file"]}"; '
-            f'if [ -x "{installed}" ]; then "{installed}"; else echo "   (not installed yet, running the repo copy)"; {fallback}; fi '
+            f'if [ -e "{installed}" ]; then {run_installed}; else echo "   (not installed yet, running the repo copy)"; {run_repo}; fi '
             f'|| {{ echo "==> {entry["file"]} failed with exit code $?"; status=1; }}'
         )
     parts.append("exit $status")
@@ -500,14 +523,15 @@ def commit_scripts(log):
     log(git_commit([FILES["scripts"], SCRIPTS_DIR], "Scripts: update scripts and files"))
 
 
-def script_run_cmd(entry):
-    """Command to run a script from the repo copy (works before Apply too)."""
-    path = SCRIPTS_DIR / entry["file"]
-    if entry.get("kind") == "python":
-        return ["python3", str(path)]
-    if entry.get("kind") == "bash":
-        return ["bash", str(path)]
-    return [str(path)]
+def interpreter(entry):
+    """Explicit interpreter for a script, so a shebang like /bin/bash (absent on
+    NixOS) cannot break it."""
+    return {"python": ["python3"], "bash": ["bash"]}.get(entry.get("kind"), [])
+
+
+def script_run_cmd(entry, path=None):
+    """Command to run a script; the repo copy by default (works before Apply too)."""
+    return interpreter(entry) + [str(path or SCRIPTS_DIR / entry["file"])]
 
 
 def installed_script_path(name, scope):
