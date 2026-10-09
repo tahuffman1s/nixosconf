@@ -16,6 +16,7 @@ GUI by default (Qt, follows the Plasma style). Subcommands for the terminal:
     nixos-updater script post-update NAME on|off | root NAME on|off
     nixos-updater defaults list | set CATEGORY DESKTOP-FILE | import
     nixos-updater app search TERM [--flathub|--nixpkgs] | add (--flatpak|--nix) ID | remove ID
+    nixos-updater udev add FILE... | remove NAME | list
 """
 
 import argparse
@@ -77,6 +78,7 @@ UNITS_DIR = CONFIG_DIR / "Config" / "units"
 SCRIPTS_DIR = CONFIG_DIR / "Home" / "scripts"
 UNIT_SUFFIXES = (".service", ".timer", ".socket", ".path", ".target", ".mount", ".automount")
 SCRIPT_SUFFIXES = (".sh", ".bash", ".py")
+UDEV_DIR = CONFIG_DIR / "Config" / "udev"
 
 # Keys under [Context] in a flatpak override file hold ';'-separated lists.
 LIST_KEYS = {"shared", "sockets", "devices", "features", "filesystems", "persistent"}
@@ -559,6 +561,36 @@ def make_timer(name, command, schedule, scope, description=""):
 
 
 # ---------------------------------------------------------------------------
+# udev rules: Config/udev/*.rules, installed by Config/udev.nix
+
+
+def udev_rules():
+    return sorted(p.name for p in UDEV_DIR.glob("*.rules")) if UDEV_DIR.is_dir() else []
+
+
+def add_udev_rule(path):
+    path = Path(path)
+    if path.suffix != ".rules":
+        raise ValueError(f"{path.name} is not a udev rules file (*.rules)")
+    UDEV_DIR.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(path, UDEV_DIR / path.name)
+    git_stage([UDEV_DIR / path.name])
+    return path.name
+
+
+def remove_udev_rule(name):
+    try:
+        (UDEV_DIR / name).unlink()
+        return True
+    except OSError:
+        return False
+
+
+def commit_udev(log):
+    log(git_commit([UDEV_DIR], "udev: update rules"))
+
+
+# ---------------------------------------------------------------------------
 # Scripts
 
 
@@ -612,6 +644,8 @@ def add_script(path, data=False, post_update=False, root=False):
         entry = add_unit(path, "system")
         entry["unit"] = True
         return entry
+    if path.suffix == ".rules":
+        return {"file": add_udev_rule(path), "udev": True, "script": False, "kind": "udev"}
     SCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
     dest = SCRIPTS_DIR / path.name
     shutil.copyfile(path, dest)
@@ -946,6 +980,24 @@ def cli(args):
                 return run_steps_cli(steps)
             print("Run `nixos-updater apply` to remove it from the system.")
             return 0
+    if args.command == "udev":
+        if args.udev_command == "list":
+            for name in udev_rules():
+                print(name)
+            return 0
+        if args.udev_command == "add":
+            for f in args.files:
+                print("Added " + add_udev_rule(f))
+            commit_udev(echo)
+            print("Run `nixos-updater apply` to install the rules.")
+            return 0
+        if args.udev_command == "remove":
+            if not remove_udev_rule(args.name):
+                print(f"{args.name} is not in the config", file=sys.stderr)
+                return 1
+            commit_udev(echo)
+            print("Run `nixos-updater apply` to remove it from the system.")
+            return 0
     if args.command == "defaults":
         data = load_json("defaults")
         apps = available_apps()
@@ -1002,6 +1054,10 @@ def cli(args):
                     units_added = True
                     print(f'{entry["file"]} is a systemd unit: added to System Units (wanted by '
                           f'{", ".join(entry["wantedBy"]) or "nothing"}) instead of the scripts')
+                    continue
+                if entry.get("udev"):
+                    print(f'{entry["file"]} is a udev rules file: added to udev rules instead of the scripts')
+                    commit_udev(echo)
                     continue
                 print(f'Added {entry["file"]} ({entry["kind"]}{", on PATH after apply" if entry["script"] else ""}'
                       f'{", runs after update" if entry["postUpdate"] else ""}{", as root" if entry["root"] else ""})')
@@ -1672,6 +1728,61 @@ def gui(smoke_test=False):
                     "home directory. The file is kept in Config/units/.")
         scope = "user"
 
+    class UdevPage(Page):
+        title = "udev Rules"
+        subtitle = ("Device rules (controllers, keyboards, dev boards, ...). Drop *.rules files here; they are kept "
+                    "in Config/udev/ and installed under /etc/udev/rules.d on the next Apply. udev reloads them then.")
+
+        def body(self):
+            self.table = DropTable(["Rules file", "First line"], (".rules",), self.add_files, "Drop .rules files here")
+            self.layout_.addWidget(self.table, 1)
+            self.actions(button("Add rules file…", ["list-add"], self.add_dialog),
+                         button("Edit", ["document-edit"], self.edit),
+                         button("Remove", ["list-remove"], self.remove), save=self.save)
+            self.refresh()
+
+        def refresh(self):
+            self.rows = udev_rules()
+            self.table.setRowCount(0)
+            for name in self.rows:
+                r = self.table.rowCount()
+                self.table.insertRow(r)
+                self.table.setItem(r, 0, QTableWidgetItem(icon("preferences-desktop-peripherals", "input-gaming"), name))
+                try:
+                    first = next((ln.strip() for ln in (UDEV_DIR / name).read_text().splitlines() if ln.strip() and not ln.startswith("#")), "")
+                except OSError:
+                    first = ""
+                self.table.setItem(r, 1, QTableWidgetItem(first[:120]))
+            self.table.resizeColumnToContents(0)
+
+        def add_files(self, paths):
+            for path in paths:
+                try:
+                    self.log("Added " + add_udev_rule(path))
+                except (OSError, ValueError) as e:
+                    QMessageBox.warning(self, "Add rules", str(e))
+            self.refresh()
+
+        def add_dialog(self):
+            paths, _ = QFileDialog.getOpenFileNames(self, "Add udev rules", str(Path.home()), "udev rules (*.rules)")
+            if paths:
+                self.add_files(paths)
+
+        def edit(self):
+            rows = selected_rows(self.table)
+            if rows:
+                QDesktopServices.openUrl(QUrl.fromLocalFile(str(UDEV_DIR / self.rows[rows[-1]])))
+
+        def remove(self):
+            for r in selected_rows(self.table):
+                remove_udev_rule(self.rows[r])
+            self.refresh()
+
+        def save(self):
+            self.log("\n==> Saving udev rules")
+            commit_udev(self.log)
+            self.window.needs_apply()
+
     class ScriptsPage(Page):
         title = "Scripts"
         subtitle = ("Bash or Python scripts and the files they need, kept together in Home/scripts/ and installed "
@@ -1734,6 +1845,9 @@ def gui(smoke_test=False):
                     self.log(f'{entry["file"]} is a systemd unit, so it went to System Units '
                              f'(wanted by {", ".join(entry["wantedBy"]) or "nothing"}). NixOS installs units from the '
                              f'config; a script cannot copy them into /etc/systemd/system.')
+                    continue
+                if entry.get("udev"):
+                    self.log(f'{entry["file"]} is a udev rules file, so it went to the udev Rules page.')
                     continue
                 self.log(f'Added {entry["file"]} ({entry["kind"]}{", on PATH after Apply" if entry["script"] else ""})')
             self.refresh()
@@ -1937,6 +2051,7 @@ def gui(smoke_test=False):
                 (SystemUnitsPage, ["preferences-system-services", "system-run"]),
                 (UserUnitsPage, ["user-identity", "system-users"]),
                 (ScriptsPage, ["text-x-script", "utilities-terminal"]),
+                (UdevPage, ["preferences-desktop-peripherals", "input-gaming"]),
                 (DefaultsPage, ["preferences-desktop-default-applications", "preferences-desktop"]),
                 (AutoUpdatePage, ["chronometer", "appointment-new"]),
             ]:
@@ -2234,6 +2349,10 @@ def main():
     aad.add_argument("--flatpak", action="store_true")
     aad.add_argument("--nix", action="store_true")
     app.add_parser("remove", help="remove an app from the config (and uninstall a flatpak)").add_argument("id")
+    udev = sub.add_parser("udev", help="udev rules kept in the config").add_subparsers(dest="udev_command")
+    udev.add_parser("add", help="copy *.rules files into the config").add_argument("files", nargs="+")
+    udev.add_parser("remove", help="remove a rules file from the config").add_argument("name")
+    udev.add_parser("list", help="list the rules files")
     args = parser.parse_args()
     if args.command == "app" and args.app_command == "add" and not (args.flatpak or args.nix):
         parser.error("app add needs --flatpak or --nix")

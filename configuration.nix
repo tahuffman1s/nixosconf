@@ -17,6 +17,7 @@
       ./Config/nixsettings.nix
       ./Config/units.nix
       ./Config/root-scripts.nix
+      ./Config/udev.nix
       ./Apps/bash.nix
       ./Apps/steam.nix
       ./Apps/zen.nix
