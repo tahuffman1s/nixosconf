@@ -65,6 +65,14 @@ and the home folder links.
 To change it later, edit `hardware.json` and run Apply in the updater, or
 rerun the setup one-liner.
 
+`hardware.json`, `user.nix`, `hardware-configuration.nix` and `drives.nix`
+describe one machine. They are tracked in git (a flake only sees tracked
+files) but each machine keeps its own values as uncommitted changes: the
+updater never commits them, Push never sends them, and a setup rerun sets
+them aside around its pull and restores them. The committed copies are
+only the defaults a fresh clone starts from, so a laptop and a desktop can
+share everything else in this repo without affecting each other.
+
 To use a branch other than `main`:
 
 ```sh

@@ -40,6 +40,8 @@ BRANCH="${NIXOSCONF_BRANCH:-main}"
 LINK="/etc/nixos"
 FLAKE_HOST="nixos"          # nixosConfigurations.<name> in flake.nix
 DRIVES="GD1 GD2"            # mounted at /mnt/<name>, written to drives.nix
+# Per-machine files: written by this script, never committed by the updater.
+MACHINE_FILES="user.nix hardware.json hardware-configuration.nix drives.nix"
 DRY_RUN="${DRY_RUN:-0}"
 
 export NIX_CONFIG="experimental-features = nix-command flakes"
@@ -405,9 +407,23 @@ if [ -d "$DIR/.git" ]; then
   [ "${origin%.git}" = "${REPO%.git}" ] \
     || die "$DIR is a checkout of '$origin', not '$REPO'. Move it aside or set NIXOSCONF_DIR."
   say "Updating existing checkout (branch $BRANCH)"
+  # The machine files are tracked (flakes only see tracked files) but hold
+  # this machine's values as uncommitted changes. Set them aside so a pull
+  # that also touches them upstream cannot conflict, then put them back.
+  keep="$(mktemp -d)"
+  for f in $MACHINE_FILES; do
+    if [ -f "$DIR/$f" ] && ! sudo -u "$USER_NAME" "$GIT" -C "$DIR" diff --quiet -- "$f" 2>/dev/null; then
+      run cp "$DIR/$f" "$keep/$f"
+      run sudo -u "$USER_NAME" "$GIT" -C "$DIR" checkout -- "$f"
+    fi
+  done
   as_user "$GIT" -C "$DIR" fetch origin "$BRANCH"
   as_user "$GIT" -C "$DIR" checkout "$BRANCH"
   as_user "$GIT" -C "$DIR" pull --ff-only --autostash origin "$BRANCH"
+  for f in $MACHINE_FILES; do
+    [ -f "$keep/$f" ] && run install -o "$USER_NAME" -g "$(id -gn "$USER_NAME")" -m 644 "$keep/$f" "$DIR/$f"
+  done
+  rm -rf "$keep"
 elif [ -e "$DIR" ]; then
   die "$DIR exists but is not a git checkout. Move it aside or set NIXOSCONF_DIR."
 else
