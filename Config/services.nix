@@ -9,7 +9,13 @@ in
   services.flatpak.enable = true;
   services.pulseaudio.enable = false;
   security.rtkit.enable = true;
-  services.lsfg-vk.enable = true;
+  # Lossless Scaling frame generation as a Vulkan layer (needs Lossless
+  # Scaling installed in Steam; the layer finds Lossless.dll through Steam's
+  # library list). The UI edits ~/.config/lsfg-vk/conf.toml per game.
+  services.lsfg-vk = {
+    enable = true;
+    ui.enable = true;
+  };
   services.pipewire = {
     enable = true;
     alsa.enable = true;

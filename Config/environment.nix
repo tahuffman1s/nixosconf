@@ -30,6 +30,5 @@ in
 
   environment.variables = { 
     EDITOR = "vim";
-    LSFG_DLL_PATH = "/mnt/GD1/SteamLibrary/steamapps/common/Lossless Scaling/Lossless.dll";
   };
 }
