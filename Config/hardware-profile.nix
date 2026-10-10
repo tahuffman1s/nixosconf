@@ -15,13 +15,15 @@ let
   #           power (Intel RAPL PL1). For laptops whose cooler cannot keep up:
   #           30 holds a 45 W i7 in the 80s while gaming. Replaces thermald.
   #   cpuTurbo: true | false   false keeps the CPU at its base clock (no boost)
+  #   thinkpad: true | false   ThinkPad extras: thinkfan with a curve that
+  #           spins up earlier than Lenovo's, fingerprint reader, TrackPoint
   #   dataDrives: true | false   mount GD1/GD2 (drives.nix)
   #   homeLinks:  true | false   link the home folders into /mnt/GD2/Backup (Home/links.nix)
   hw = {
     cpu = "amd"; gpu = "amd"; igpu = "intel"; prime = "offload";
     busIds = { igpu = ""; nvidia = ""; }; laptop = false;
     dataDrives = true; homeLinks = true; firmwarePowerProfile = true;
-    cpuPowerLimitWatts = null; cpuTurbo = true;
+    cpuPowerLimitWatts = null; cpuTurbo = true; thinkpad = false;
   } // builtins.fromJSON (builtins.readFile ../hardware.json);
   powerCap = hw.cpuPowerLimitWatts;
   tuneCpu = powerCap != null || !hw.cpuTurbo;
@@ -179,6 +181,25 @@ in
   powerManagement.resumeCommands = lib.mkIf tuneCpu ''
     ${pkgs.systemd}/bin/systemctl restart cpu-power-limits.service || true
   '';
+
+  # ---------------------------------------------------------------------
+  # ThinkPad: Lenovo's embedded-controller fan curve waits until the CPU is
+  # already hot. thinkfan takes over through thinkpad_acpi with a curve that
+  # starts earlier and reaches full speed before the throttle point; if it
+  # ever stops, the fan goes back to the firmware's automatic control.
+  services.thinkfan = lib.mkIf hw.thinkpad {
+    enable = true;
+    levels = [
+      [ 0 0 50 ]
+      [ 2 45 58 ]
+      [ 4 55 66 ]
+      [ 6 63 76 ]
+      [ 7 73 84 ]
+      [ "level full-speed" 82 32767 ]
+    ];
+  };
+  services.fprintd.enable = lib.mkIf hw.thinkpad true;
+  hardware.trackpoint = lib.mkIf hw.thinkpad { enable = true; emulateWheel = true; };
   services.upower.enable = lib.mkIf hw.laptop true;
   hardware.sensor.iio.enable = hw.laptop;
   networking.networkmanager.wifi.powersave = lib.mkIf hw.laptop true;

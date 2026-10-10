@@ -58,6 +58,7 @@ and the home folder links.
 | `homeLinks` | `false` leaves Documents, Downloads, Music, Pictures, Videos, `.ssh` and the book libraries as ordinary folders; `true` needs the GD2 drive |
 | `cpuPowerLimitWatts` | A number caps the CPU's sustained package power (Intel RAPL) at boot and after resume, for laptops whose cooler cannot keep up: 30 holds a 45 W i7 in the 80s while gaming and usually smooths the frame rate, because the chip stops thermal-cycling. Turns thermald off, since it would raise the limit again. `null` (default) leaves the firmware's limit |
 | `cpuTurbo` | `false` holds the CPU at its base clock (no boost); a coarser version of the power cap |
+| `thinkpad` | `true` runs thinkfan with a fan curve that spins up earlier than Lenovo's own and hits full speed before the CPU throttles, enables the fingerprint reader (enrol with `fprintd-enroll`) and TrackPoint middle-button scrolling |
 | `firmwarePowerProfile` | Laptops only. `false` stops power-profiles-daemon from following the firmware's own thermal profile, for laptops whose firmware keeps resetting it to balanced; the CPU preference still follows the chosen profile |
 | Laptop | power-profiles-daemon (Plasma's battery widget), thermald on Intel, Wi-Fi power saving, lid closes to suspend, power key suspends (long press powers off), rotation sensors, brightnessctl and powertop, zram swappiness back to 60, NVIDIA runtime power management when the GPU is NVIDIA |
 
