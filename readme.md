@@ -21,8 +21,11 @@ laptop. A hybrid also asks how to use the NVIDIA GPU (PRIME offload or sync)
 and confirms the two PCI bus IDs it found. It also asks whether to mount the
 GD1 and GD2 data drives at all, and whether to replace the home folders with
 links into `/mnt/GD2/Backup`; both default to yes on a desktop or when a
-drive with that label is visible, and to no on a laptop. Enter through the
-questions keeps the detected answers. Then it clones
+drive with that label is visible, and to no on a laptop. A laptop gets a
+few more: ThinkPad extras (detected), the power profile on the charger and
+on battery, a CPU power cap, turbo boost, and whether the firmware's thermal
+mode may change the power profile. Enter through the questions keeps the
+detected answers. Then it clones
 this repo into `~/nixosconf` (owned by you), points `/etc/nixos` at it, writes
 `user.nix` with your account name and `hardware.json` with those answers,
 generates `hardware-configuration.nix`, finds the GD1 and GD2 drives for
@@ -41,7 +44,9 @@ hardware without asking; `NIXOSCONF_GPU=amd|nvidia|intel|hybrid`,
 `NIXOSCONF_IGPU=intel|amd`, `NIXOSCONF_PRIME=offload|sync`,
 `NIXOSCONF_IGPU_BUSID` and `NIXOSCONF_NVIDIA_BUSID` override detection.
 `NIXOSCONF_DRIVES=1|0` and `NIXOSCONF_HOME_LINKS=1|0` decide the data drives
-and the home folder links.
+and the home folder links; `NIXOSCONF_THINKPAD`, `NIXOSCONF_CPU_WATTS`,
+`NIXOSCONF_CPU_TURBO`, `NIXOSCONF_FIRMWARE_PROFILE`, `NIXOSCONF_AC_PROFILE`
+and `NIXOSCONF_BATTERY_PROFILE` cover the laptop questions.
 
 ### Hardware profiles
 
@@ -58,6 +63,7 @@ and the home folder links.
 | `homeLinks` | `false` leaves Documents, Downloads, Music, Pictures, Videos, `.ssh` and the book libraries as ordinary folders; `true` needs the GD2 drive |
 | `cpuPowerLimitWatts` | A number caps the CPU's sustained package power (Intel RAPL) at boot and after resume, for laptops whose cooler cannot keep up: 30 holds a 45 W i7 in the 80s while gaming and usually smooths the frame rate, because the chip stops thermal-cycling. Turns thermald off, since it would raise the limit again. `null` (default) leaves the firmware's limit |
 | `cpuTurbo` | `false` holds the CPU at its base clock (no boost); a coarser version of the power cap |
+| `acPowerProfile`, `batteryPowerProfile` | The power profile Plasma applies on the charger (default performance) and on battery (default balanced); low battery is always power saving. On battery the firmware also cuts the GPU's power budget, which no profile can undo |
 | `thinkpad` | `true` runs thinkfan with a fan curve that spins up earlier than Lenovo's own and hits full speed before the CPU throttles, enables the fingerprint reader (enrol with `fprintd-enroll`) and TrackPoint middle-button scrolling |
 | `firmwarePowerProfile` | Laptops only. `false` stops power-profiles-daemon from following the firmware's own thermal profile, for laptops whose firmware keeps resetting it to balanced; the CPU preference still follows the chosen profile |
 | Laptop | power-profiles-daemon (Plasma's battery widget), thermald on Intel, Wi-Fi power saving, lid closes to suspend, power key suspends (long press powers off), rotation sensors, brightnessctl and powertop, zram swappiness back to 60, NVIDIA runtime power management when the GPU is NVIDIA |

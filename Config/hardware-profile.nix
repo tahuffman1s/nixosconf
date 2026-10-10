@@ -15,6 +15,8 @@ let
   #           power (Intel RAPL PL1). For laptops whose cooler cannot keep up:
   #           30 holds a 45 W i7 in the 80s while gaming. Replaces thermald.
   #   cpuTurbo: true | false   false keeps the CPU at its base clock (no boost)
+  #   acPowerProfile, batteryPowerProfile: "performance" | "balanced" |
+  #           "powerSaving"   what Plasma applies on the charger / on battery
   #   thinkpad: true | false   ThinkPad extras: thinkfan with a curve that
   #           spins up earlier than Lenovo's, fingerprint reader, TrackPoint
   #   dataDrives: true | false   mount GD1/GD2 (drives.nix)

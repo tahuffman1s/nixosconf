@@ -1,6 +1,7 @@
 { config, pkgs, lib, ...}:
 let 
-  hw = { laptop = false; } // builtins.fromJSON (builtins.readFile ../hardware.json);
+  hw = { laptop = false; acPowerProfile = "performance"; batteryPowerProfile = "balanced"; }
+    // builtins.fromJSON (builtins.readFile ../hardware.json);
   # Shipped in this repo (Files/), unpacked in a derivation instead of being
   # downloaded from GitHub at evaluation time.
   kdeTheme = pkgs.runCommand "dracula-kde-theme" { } ''
@@ -33,8 +34,8 @@ in
     # changes, at login and after sleep. Picking one in the battery tray icon
     # only lasts until the next such event; this is the setting behind it.
     powerdevil = lib.mkIf hw.laptop {
-      AC.powerProfile = "performance";
-      battery.powerProfile = "balanced";
+      AC.powerProfile = hw.acPowerProfile;
+      battery.powerProfile = hw.batteryPowerProfile;
       lowBattery.powerProfile = "powerSaving";
     };
     # Custom command shortcuts, managed by NixOS Updater (Shortcuts tab).

@@ -22,6 +22,11 @@
 #   NIXOSCONF_IGPU_BUSID, NIXOSCONF_NVIDIA_BUSID   hybrid: PCI:bus:device:function
 #   NIXOSCONF_CPU               amd | intel                (default: detected, then asked)
 #   NIXOSCONF_LAPTOP            1 | 0                      (default: detected, then asked)
+#   NIXOSCONF_THINKPAD          1 | 0   ThinkPad extras (thinkfan, fingerprint, TrackPoint)
+#   NIXOSCONF_CPU_WATTS         number | none   cap the CPU's sustained power (laptops)
+#   NIXOSCONF_CPU_TURBO         1 | 0   allow turbo boost (laptops)
+#   NIXOSCONF_FIRMWARE_PROFILE  1 | 0   let the firmware's thermal mode drive the power profile
+#   NIXOSCONF_AC_PROFILE, NIXOSCONF_BATTERY_PROFILE   performance | balanced | powerSaving
 #   NIXOSCONF_DRIVES            1 | 0   mount the GD1/GD2 data drives   (default: detected, then asked)
 #   NIXOSCONF_HOME_LINKS        1 | 0   link Documents, Downloads, ... and .ssh into /mnt/GD2/Backup
 #   NIXOSCONF_NO_UI=1           take the detected/overridden hardware without asking
@@ -276,6 +281,39 @@ case "$CPU" in amd|intel) ;; *) die "NIXOSCONF_CPU must be amd or intel (got '$C
 case "$IGPU" in amd|intel) ;; *) die "NIXOSCONF_IGPU must be intel or amd (got '$IGPU')" ;; esac
 case "$PRIME" in offload|sync) ;; *) die "NIXOSCONF_PRIME must be offload or sync (got '$PRIME')" ;; esac
 
+# Laptop tuning. ThinkPads get thinkfan and friends; the firmware thermal
+# mode is ignored on them by default because Lenovo's resets itself.
+detect_thinkpad() {
+  case "$(cat /sys/class/dmi/id/product_version /sys/class/dmi/id/product_family 2>/dev/null)" in
+    *ThinkPad*) echo 1 ;; *) echo 0 ;;
+  esac
+}
+THINKPAD="${NIXOSCONF_THINKPAD:-$(read_hw thinkpad)}"
+case "$THINKPAD" in true|1) THINKPAD=1 ;; false|0) THINKPAD=0 ;; *) THINKPAD="$(detect_thinkpad)" ;; esac
+CPU_WATTS="${NIXOSCONF_CPU_WATTS:-$(read_hw cpuPowerLimitWatts)}"
+case "$CPU_WATTS" in ''|null|none|0) CPU_WATTS=none ;; *[!0-9]*) die "NIXOSCONF_CPU_WATTS must be a number of watts or none (got '$CPU_WATTS')" ;; esac
+CPU_TURBO="${NIXOSCONF_CPU_TURBO:-$(read_hw cpuTurbo)}"
+case "$CPU_TURBO" in false|0) CPU_TURBO=0 ;; *) CPU_TURBO=1 ;; esac
+FW_PROFILE="${NIXOSCONF_FIRMWARE_PROFILE:-$(read_hw firmwarePowerProfile)}"
+case "$FW_PROFILE" in true|1) FW_PROFILE=1 ;; false|0) FW_PROFILE=0 ;; *) FW_PROFILE=$((1 - THINKPAD)) ;; esac
+AC_PROFILE="${NIXOSCONF_AC_PROFILE:-$(read_hw acPowerProfile)}";           [ -n "$AC_PROFILE" ] || AC_PROFILE=performance
+BATTERY_PROFILE="${NIXOSCONF_BATTERY_PROFILE:-$(read_hw batteryPowerProfile)}"; [ -n "$BATTERY_PROFILE" ] || BATTERY_PROFILE=balanced
+for v in AC_PROFILE BATTERY_PROFILE; do
+  case "${!v}" in performance|balanced|powerSaving) ;; *) die "$v must be performance, balanced or powerSaving (got '${!v}')" ;; esac
+done
+profile_opts=(
+  "performance  highest clocks and fan speed"
+  "balanced     the usual default"
+  "powerSaving  longest battery life"
+)
+watts_opts=(
+  "none  firmware default (fine when the cooler keeps up)"
+  "25    very hot or very loud laptops"
+  "30    45 W chips that hit 100 °C while gaming"
+  "35    a gentler cap"
+  "45    full 45 W, boost bursts still capped"
+)
+
 # Data drives: yes when a GD1/GD2 filesystem is visible or already mounted,
 # otherwise yes on desktops and no on laptops. Home links follow the drives.
 drives_visible() {
@@ -381,10 +419,23 @@ if [ "$HAVE_TTY" = 1 ] && [ "$NO_UI" != 1 ]; then
       HOME_LINKS=0
     fi
   fi
+  if [ "$LAPTOP" = 1 ]; then
+    if confirm "Is it a ThinkPad? (thinkfan curve, fingerprint reader, TrackPoint scrolling)" "$(yn "$THINKPAD")"; then THINKPAD=1; else THINKPAD=0; fi
+    pick="$(choose "Power profile on the charger" "$(opt_for "$AC_PROFILE" "${profile_opts[@]}")" "${profile_opts[@]}")"
+    AC_PROFILE="${pick%% *}"
+    pick="$(choose "Power profile on battery (the firmware also cuts GPU power unplugged; this only sets the CPU side)" \
+                   "$(opt_for "$BATTERY_PROFILE" "${profile_opts[@]}")" "${profile_opts[@]}")"
+    BATTERY_PROFILE="${pick%% *}"
+    pick="$(choose "Cap the CPU's sustained power? (keeps a hot laptop out of thermal throttling)" \
+                   "$(opt_for "$CPU_WATTS" "${watts_opts[@]}")" "${watts_opts[@]}")"
+    CPU_WATTS="${pick%% *}"
+    if confirm "Allow turbo boost? (no: hold the CPU at its base clock)" "$(yn "$CPU_TURBO")"; then CPU_TURBO=1; else CPU_TURBO=0; fi
+    if confirm "Let the firmware's thermal mode change the power profile? (no if the profile keeps resetting to balanced)" "$(yn "$FW_PROFILE")"; then FW_PROFILE=1; else FW_PROFILE=0; fi
+  fi
   box "Ready to install" \
     "GPU       $(gpu_desc)" \
     "CPU       $CPU" \
-    "Laptop    $(yn "$LAPTOP")" \
+    "Laptop    $(yn "$LAPTOP")$([ "$LAPTOP" = 1 ] && echo "   ThinkPad: $(yn "$THINKPAD")   charger: $AC_PROFILE   battery: $BATTERY_PROFILE   CPU cap: $CPU_WATTS W   turbo: $(yn "$CPU_TURBO")   firmware profile: $(yn "$FW_PROFILE")")" \
     "Drives    $(yn "$DATA_DRIVES")   home folder links: $(yn "$HOME_LINKS")" \
     "" \
     "Next: clone the config, generate the hardware files, build and" \
@@ -392,6 +443,7 @@ if [ "$HAVE_TTY" = 1 ] && [ "$NO_UI" != 1 ]; then
   confirm "Start now?" yes || { say "Nothing changed."; exit 0; }
 else
   say "No terminal for the setup UI; using GPU=$(gpu_desc) CPU=$CPU laptop=$LAPTOP drives=$DATA_DRIVES links=$HOME_LINKS (override with NIXOSCONF_GPU/CPU/LAPTOP/DRIVES/HOME_LINKS)"
+  [ "$LAPTOP" = 1 ] && say "Laptop: thinkpad=$THINKPAD charger=$AC_PROFILE battery=$BATTERY_PROFILE cpu_watts=$CPU_WATTS turbo=$CPU_TURBO firmware_profile=$FW_PROFILE"
 fi
 [ "$DATA_DRIVES" = 1 ] || HOME_LINKS=0
 if [ "$GPU" = hybrid ] && { [ -z "$IGPU_BUSID" ] || [ -z "$NVIDIA_BUSID" ]; }; then
@@ -446,34 +498,40 @@ write_as_user "$DIR/user.nix" <<NIX
 NIX
 
 tf() { if [ "$1" = 1 ]; then echo true; else echo false; fi; }
-say "Writing hardware.json (gpu=$(gpu_desc) cpu=$CPU laptop=$LAPTOP drives=$DATA_DRIVES links=$HOME_LINKS)"
-if [ "$GPU" = hybrid ]; then
-  write_as_user "$DIR/hardware.json" <<JSON
-{
-  "cpu": "$CPU",
-  "gpu": "hybrid",
+hybrid_json() {
+  [ "$GPU" = hybrid ] || return 0
+  cat <<JSON
   "igpu": "$IGPU",
   "prime": "$PRIME",
   "busIds": {
     "igpu": "$IGPU_BUSID",
     "nvidia": "$NVIDIA_BUSID"
   },
-  "laptop": $(tf "$LAPTOP"),
-  "dataDrives": $(tf "$DATA_DRIVES"),
-  "homeLinks": $(tf "$HOME_LINKS")
-}
 JSON
-else
-  write_as_user "$DIR/hardware.json" <<JSON
+}
+laptop_json() {
+  [ "$LAPTOP" = 1 ] || return 0
+  cat <<JSON
+  "thinkpad": $(tf "$THINKPAD"),
+  "acPowerProfile": "$AC_PROFILE",
+  "batteryPowerProfile": "$BATTERY_PROFILE",
+  "cpuPowerLimitWatts": $([ "$CPU_WATTS" = none ] && echo null || echo "$CPU_WATTS"),
+  "cpuTurbo": $(tf "$CPU_TURBO"),
+  "firmwarePowerProfile": $(tf "$FW_PROFILE"),
+JSON
+}
+say "Writing hardware.json (gpu=$(gpu_desc) cpu=$CPU laptop=$LAPTOP drives=$DATA_DRIVES links=$HOME_LINKS)"
+extra="$(hybrid_json; laptop_json)"
+write_as_user "$DIR/hardware.json" <<JSON
 {
   "cpu": "$CPU",
-  "gpu": "$GPU",
+  "gpu": "$GPU",${extra:+
+$extra}
   "laptop": $(tf "$LAPTOP"),
   "dataDrives": $(tf "$DATA_DRIVES"),
   "homeLinks": $(tf "$HOME_LINKS")
 }
 JSON
-fi
 
 # ---------------------------------------------------------------------------
 # 3. hardware-configuration.nix and drives.nix for this machine
