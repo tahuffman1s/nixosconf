@@ -10,8 +10,12 @@ in
   services.pulseaudio.enable = false;
   security.rtkit.enable = true;
   # Lossless Scaling frame generation as a Vulkan layer (needs Lossless
-  # Scaling installed in Steam; the layer finds Lossless.dll through Steam's
-  # library list). The UI edits ~/.config/lsfg-vk/conf.toml per game.
+  # Scaling installed in Steam). The layer only looks for Lossless.dll in the
+  # default Steam library under ~; a game on another library (the desktop's
+  # /mnt/GD1/SteamLibrary) needs its path in the UI's DLL field, which
+  # writes [global] dll in ~/.config/lsfg-vk/conf.toml. A game turns it on
+  # by matching a [[game]] entry there; under Wine set LSFG_PROCESS=<name>
+  # for the game and use that name as the entry's exe.
   services.lsfg-vk = {
     enable = true;
     ui.enable = true;
