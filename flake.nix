@@ -29,18 +29,13 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
-    lsfg-vk-flake = {
-      url = "github:pabloaul/lsfg-vk-flake/main";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
-
     kurve-flake = {
       url = "github:tahuffman1s/kdePackages-kurve-flake";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
 
-  outputs = { self, nixpkgs, home-manager, nix-flatpak, plasma-manager, lsfg-vk-flake, ... }@inputs:
+  outputs = { self, nixpkgs, home-manager, nix-flatpak, plasma-manager, ... }@inputs:
   let
     # Which account the system and home config are for; see user.nix.
     user = import ./user.nix;
@@ -50,7 +45,6 @@
       specialArgs = { inherit inputs user; };
       modules = [
         ./configuration.nix
-        lsfg-vk-flake.nixosModules.default
         home-manager.nixosModules.home-manager
         {
           home-manager.useGlobalPkgs = true;
