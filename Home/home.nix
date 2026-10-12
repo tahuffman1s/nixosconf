@@ -12,6 +12,7 @@ in
    ./scripts.nix
    ./defaults.nix
    ./dotfiles.nix
+   ./lsfg-vk.nix
    ../Apps/git.nix
    ../Apps/starship.nix
    ../Apps/kitty.nix

@@ -3,5 +3,6 @@
   "gpu": "amd",
   "laptop": false,
   "dataDrives": true,
-  "homeLinks": true
+  "homeLinks": true,
+  "lsfgDll": "/mnt/GD1/SteamLibrary/steamapps/common/Lossless Scaling/lsfg-vk.dll"
 }

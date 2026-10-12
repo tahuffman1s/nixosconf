@@ -61,6 +61,7 @@ and `NIXOSCONF_BATTERY_PROFILE` cover the laptop questions.
 | CPU `amd` / `intel` | The matching microcode updates |
 | `dataDrives` | `false` writes an empty `drives.nix` and disables the mounts; nothing under `/mnt` is touched |
 | `homeLinks` | `false` leaves Documents, Downloads, Music, Pictures, Videos, `.ssh` and the book libraries as ordinary folders; `true` needs the GD2 drive |
+| `lsfgDll` | Path to `lsfg-vk.dll` when Lossless Scaling is not in the default Steam library; setup.sh finds it in Steam's library list. Used by `Home/lsfg-vk.nix` |
 | `cpuPowerLimitWatts` | A number caps the CPU's sustained package power (Intel RAPL) at boot and after resume, for laptops whose cooler cannot keep up: 30 holds a 45 W i7 in the 80s while gaming and usually smooths the frame rate, because the chip stops thermal-cycling. Turns thermald off, since it would raise the limit again. `null` (default) leaves the firmware's limit |
 | `cpuTurbo` | `false` holds the CPU at its base clock (no boost); a coarser version of the power cap |
 | `acPowerProfile`, `batteryPowerProfile` | The power profile Plasma applies on the charger (default performance) and on battery (default balanced); low battery is always power saving. On battery the firmware also cuts the GPU's power budget, which no profile can undo |

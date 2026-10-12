@@ -27,6 +27,7 @@
 #   NIXOSCONF_CPU_TURBO         1 | 0   allow turbo boost (laptops)
 #   NIXOSCONF_FIRMWARE_PROFILE  1 | 0   let the firmware's thermal mode drive the power profile
 #   NIXOSCONF_AC_PROFILE, NIXOSCONF_BATTERY_PROFILE   performance | balanced | powerSaving
+#   NIXOSCONF_LSFG_DLL          path to lsfg-vk.dll        (default: kept, else found in Steam's libraries)
 #   NIXOSCONF_DRIVES            1 | 0   mount the GD1/GD2 data drives   (default: detected, then asked)
 #   NIXOSCONF_HOME_LINKS        1 | 0   link Documents, Downloads, ... and .ssh into /mnt/GD2/Backup
 #   NIXOSCONF_NO_UI=1           take the detected/overridden hardware without asking
@@ -314,6 +315,30 @@ watts_opts=(
   "45    full 45 W, boost bursts still capped"
 )
 
+# lsfg-vk.dll (Lossless Scaling's "lsfg-vk" Steam branch). The layer finds
+# it in the default Steam library by itself; record it only when Lossless
+# Scaling sits in another library, such as one on a data drive.
+read_hw_string() { # key -> string value from an existing hardware.json
+  [ -f "$DIR/hardware.json" ] || return 0
+  sed -n "s/^[[:space:]]*\"$1\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$DIR/hardware.json" | head -1
+}
+detect_lsfg_dll() {
+  local vdf lib dll
+  for vdf in "$HOME_DIR/.local/share/Steam/steamapps/libraryfolders.vdf" \
+             "$HOME_DIR/.steam/steam/steamapps/libraryfolders.vdf"; do
+    [ -r "$vdf" ] || continue
+    while IFS= read -r lib; do
+      case "$lib" in "$HOME_DIR/.local/share/Steam"|"$HOME_DIR/.steam/steam") continue ;; esac
+      dll="$lib/steamapps/common/Lossless Scaling/lsfg-vk.dll"
+      [ -f "$dll" ] && { printf '%s\n' "$dll"; return 0; }
+    done < <(sed -n 's/^[[:space:]]*"path"[[:space:]]*"\(.*\)"[[:space:]]*$/\1/p' "$vdf")
+    return 0
+  done
+  return 0
+}
+LSFG_DLL="${NIXOSCONF_LSFG_DLL:-$(read_hw_string lsfgDll)}"
+[ -n "$LSFG_DLL" ] || LSFG_DLL="$(detect_lsfg_dll)"
+
 # Data drives: yes when a GD1/GD2 filesystem is visible or already mounted,
 # otherwise yes on desktops and no on laptops. Home links follow the drives.
 drives_visible() {
@@ -541,13 +566,16 @@ JSON
 }
 say "Writing hardware.json (gpu=$(gpu_desc) cpu=$CPU laptop=$LAPTOP drives=$DATA_DRIVES links=$HOME_LINKS)"
 extra="$(hybrid_json; laptop_json)"
+lsfg_json=""
+[ -n "$LSFG_DLL" ] && lsfg_json="
+  \"lsfgDll\": \"$LSFG_DLL\","
 write_as_user "$DIR/hardware.json" <<JSON
 {
   "cpu": "$CPU",
   "gpu": "$GPU",${extra:+
 $extra}
   "laptop": $(tf "$LAPTOP"),
-  "dataDrives": $(tf "$DATA_DRIVES"),
+  "dataDrives": $(tf "$DATA_DRIVES"),${lsfg_json}
   "homeLinks": $(tf "$HOME_LINKS")
 }
 JSON

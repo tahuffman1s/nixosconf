@@ -19,6 +19,8 @@ let
   #           "powerSaving"   what Plasma applies on the charger / on battery
   #   thinkpad: true | false   ThinkPad extras: thinkfan with a curve that
   #           spins up earlier than Lenovo's, fingerprint reader, TrackPoint
+  #   lsfgDll: null | path   lsfg-vk.dll when Lossless Scaling is not in the
+  #           default Steam library (read by Home/lsfg-vk.nix)
   #   dataDrives: true | false   mount GD1/GD2 (drives.nix)
   #   homeLinks:  true | false   link the home folders into /mnt/GD2/Backup (Home/links.nix)
   hw = {
