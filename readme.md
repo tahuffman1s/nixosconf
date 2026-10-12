@@ -96,7 +96,11 @@ nixos-updater flush                            # or `flush` in fish
 sudo nixos-rebuild switch --flake /etc/nixos   # or `swap` in fish, after editing
 ```
 
-Update syncs the installed Flatpaks, their permissions and any autostart
+Update first merges any config changes pushed to GitHub (from the other
+machine, say) into the local clone, keeping this machine's own files; if
+the network or a conflict gets in the way it says so and carries on with
+the local config. `nixos-updater pull` does only that step. Then it syncs
+the installed Flatpaks, their permissions and any autostart
 entries Plasma created into the config, commits that, refreshes `flake.lock`,
 runs `nixos-rebuild switch --flake /etc/nixos` (asking for your password
 through polkit), updates the Flatpaks, and offers a reboot if the kernel

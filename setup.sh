@@ -469,9 +469,28 @@ if [ -d "$DIR/.git" ]; then
       run sudo -u "$USER_NAME" "$GIT" -C "$DIR" checkout -- "$f"
     fi
   done
-  as_user "$GIT" -C "$DIR" fetch origin "$BRANCH"
+  as_user "$GIT" -C "$DIR" fetch origin "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH"
   as_user "$GIT" -C "$DIR" checkout "$BRANCH"
-  as_user "$GIT" -C "$DIR" pull --ff-only --autostash origin "$BRANCH"
+  # The updater commits locally (Flatpak syncs, flake.lock bumps), so this
+  # is a merge, not a fast-forward. Both sides bumping flake.lock is the
+  # usual conflict: take the upstream lock, the build refreshes it anyway.
+  ident=()
+  [ -n "$(sudo -u "$USER_NAME" "$GIT" -C "$DIR" config user.email 2>/dev/null)" ] \
+    || ident=(-c user.name=nixosconf -c user.email=nixosconf@localhost)
+  if ! as_user "$GIT" "${ident[@]}" -C "$DIR" merge --no-edit --autostash "origin/$BRANCH"; then
+    conflicts="$(sudo -u "$USER_NAME" "$GIT" -C "$DIR" diff --name-only --diff-filter=U)"
+    if [ "$conflicts" = flake.lock ]; then
+      as_user "$GIT" -C "$DIR" checkout --theirs -- flake.lock
+      as_user "$GIT" -C "$DIR" add flake.lock
+      as_user "$GIT" "${ident[@]}" -C "$DIR" commit --no-edit
+    else
+      as_user "$GIT" -C "$DIR" merge --abort || true
+      for f in $MACHINE_FILES; do
+        [ -f "$keep/$f" ] && run install -o "$USER_NAME" -g "$(id -gn "$USER_NAME")" -m 644 "$keep/$f" "$DIR/$f"
+      done
+      die "Could not merge origin/$BRANCH into $DIR (conflicts: $(echo "$conflicts" | tr '\n' ' ')). Merge it by hand, then rerun."
+    fi
+  fi
   for f in $MACHINE_FILES; do
     [ -f "$keep/$f" ] && run install -o "$USER_NAME" -g "$(id -gn "$USER_NAME")" -m 644 "$keep/$f" "$DIR/$f"
   done

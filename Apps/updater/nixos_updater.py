@@ -834,13 +834,107 @@ def step_sync(log, dry_run=False):
     return bool(changed)
 
 
-def update_steps(sync=True):
+# Files that describe one machine. They are tracked (flakes only see tracked
+# files) but each machine keeps its own values as uncommitted changes, so a
+# pull sets them aside and puts them back.
+MACHINE_FILES = ("user.nix", "hardware.json", "hardware-configuration.nix", "drives.nix")
+
+
+def _git(*args, timeout=120):
+    env = dict(os.environ, GIT_TERMINAL_PROMPT="0",
+               GIT_SSH_COMMAND="ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new")
+    ident = []
+    if not run_capture(["git", "config", "user.email"], cwd=CONFIG_DIR).strip():
+        ident = ["-c", "user.name=nixosconf", "-c", "user.email=nixosconf@localhost"]
+    return subprocess.run(["git", *ident, *args], cwd=CONFIG_DIR, env=env, capture_output=True,
+                          text=True, check=False, timeout=timeout)
+
+
+def step_pull(log):
+    """Merge the upstream branch (GitHub) into the local config, keeping this
+    machine's files. Never stops the update: when the network, credentials or
+    a conflict get in the way it says why and the update uses the local config."""
+    if not shutil.which("git") or not remote_url():
+        log("No git remote configured; using the local config.")
+        return
+    upstream = _git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}").stdout.strip()
+    if not upstream:
+        branch = _git("rev-parse", "--abbrev-ref", "HEAD").stdout.strip() or "main"
+        upstream = f"origin/{branch}"
+    remote, _, rbranch = upstream.partition("/")
+    try:
+        f = _git("fetch", "-q", remote, f"+refs/heads/{rbranch}:refs/remotes/{remote}/{rbranch}")
+    except subprocess.TimeoutExpired:
+        log("Fetching from GitHub timed out; using the local config.")
+        return
+    if f.returncode != 0:
+        why = (f.stderr.strip().splitlines() or ["unknown error"])[-1]
+        log(f"Could not fetch {upstream} ({why}); using the local config.")
+        return
+    incoming = _git("log", "--oneline", f"HEAD..{upstream}").stdout.strip().splitlines()
+    if not incoming:
+        log(f"Already up to date with {upstream}.")
+        return
+    log(f"{len(incoming)} new commit(s) on {upstream}:")
+    for line in incoming[:15]:
+        log("  " + line)
+    if len(incoming) > 15:
+        log(f"  ... and {len(incoming) - 15} more")
+
+    saved = {}
+    for name in MACHINE_FILES:
+        path = CONFIG_DIR / name
+        if path.exists() and _git("diff", "--quiet", "HEAD", "--", name).returncode != 0:
+            saved[name] = path.read_bytes()
+            _git("checkout", "HEAD", "--", name)
+    try:
+        m = _git("merge", "--no-edit", "--autostash", upstream)
+        if m.returncode != 0:
+            conflicts = _git("diff", "--name-only", "--diff-filter=U").stdout.split()
+            resolved = False
+            if conflicts and set(conflicts) <= {"flake.lock"}:
+                # Both sides bumped the lock; take upstream's, the next step
+                # refreshes it anyway.
+                _git("checkout", "--theirs", "--", "flake.lock")
+                _git("add", "flake.lock")
+                resolved = _git("commit", "--no-edit").returncode == 0
+            if not resolved:
+                _git("merge", "--abort")
+                log("Could not merge " + upstream + " automatically"
+                    + (" (conflicts in " + ", ".join(conflicts) + ")" if conflicts else "")
+                    + f"; using the local config. Merge by hand: git -C {CONFIG_DIR} merge {upstream}")
+                return
+        log(f"Merged {upstream}.")
+    finally:
+        for name, data in saved.items():
+            (CONFIG_DIR / name).write_bytes(data)
+        if saved:
+            log("Kept this machine's " + ", ".join(sorted(saved)) + ".")
+
+
+def step_fix_flatpak_exports(log):
+    """Flatpak copies hicolor/index.theme from the read-only Nix store into its
+    exports; the copy is read-only too, so the next copy fails with
+    "Permission denied". Make it writable before updating."""
+    path = Path.home() / ".local/share/flatpak/exports/share/icons/hicolor/index.theme"
+    try:
+        if path.is_file() and not path.is_symlink() and not os.access(path, os.W_OK):
+            path.chmod(path.stat().st_mode | stat.S_IWUSR)
+            log("Made the exported icon theme index writable again.")
+    except OSError as e:
+        log(f"Could not fix {path}: {e}")
+
+
+def update_steps(sync=True, pull=True):
     steps = []
+    if pull:
+        steps.append(("Pulling config changes from GitHub", lambda log: step_pull(log)))
     if sync:
         steps.append(("Syncing Flatpaks and autostart entries", lambda log: step_sync(log)))
     steps.append(("Refreshing flake inputs", ["nix", "flake", "update", "--flake", str(CONFIG_DIR)]))
     steps.append(("Committing flake.lock", lambda log: log(git_commit([CONFIG_DIR / "flake.lock"], "Update flake inputs"))))
     steps.append(("Building and switching to the new system", root_cmd("switch")))
+    steps.append(("Preparing Flatpak exports", lambda log: step_fix_flatpak_exports(log)))
     steps.append(("Updating Flatpaks", ["flatpak", "update", "--user", "-y", "--noninteractive"]))
     steps += post_update_steps()
     return steps
@@ -970,8 +1064,11 @@ def cli(args):
     if args.command == "sync":
         step_sync(echo, dry_run=args.dry_run)
         return 0
+    if args.command == "pull":
+        step_pull(echo)
+        return 0
     if args.command == "update":
-        rc = run_steps_cli(update_steps(sync=not args.no_sync))
+        rc = run_steps_cli(update_steps(sync=not args.no_sync, pull=not args.no_pull))
         if rc == 0 and reboot_required():
             print("\n==> A reboot is needed for the new kernel to take effect.")
         return rc
@@ -2462,8 +2559,10 @@ def main():
     parser = argparse.ArgumentParser(prog=APP_ID, description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command")
     sub.add_parser("gui", help="open the window (default)").add_argument("--smoke-test", action="store_true", help=argparse.SUPPRESS)
-    up = sub.add_parser("update", help="sync, refresh inputs, rebuild, update flatpaks")
+    up = sub.add_parser("update", help="pull, sync, refresh inputs, rebuild, update flatpaks")
     up.add_argument("--no-sync", action="store_true", help="skip the flatpak and autostart sync")
+    up.add_argument("--no-pull", action="store_true", help="do not merge config changes from GitHub first")
+    sub.add_parser("pull", help="merge config changes from GitHub, keeping this machine's files")
     sc = sub.add_parser("sync", help="import installed flatpaks, permissions and autostart entries into the config")
     sc.add_argument("--dry-run", action="store_true", help="only show what would change")
     sub.add_parser("apply", help="rebuild from the config as it is now")
