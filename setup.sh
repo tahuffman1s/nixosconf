@@ -29,6 +29,7 @@
 #   NIXOSCONF_AC_PROFILE, NIXOSCONF_BATTERY_PROFILE   performance | balanced | powerSaving
 #   NIXOSCONF_SOF_AUDIO         1 | 0   Intel SOF audio driver (built-in digital mics)
 #   NIXOSCONF_SOF_DMICS         1-4     number of built-in digital mics, when the firmware hides them
+#   NIXOSCONF_HDA_MODEL         snd-hda-intel model= for the built-in sound chip (default: kept)
 #   NIXOSCONF_LSFG_DLL          path to lsfg-vk.dll        (default: kept, else found in Steam's libraries)
 #   NIXOSCONF_DRIVES            1 | 0   mount the GD1/GD2 data drives   (default: detected, then asked)
 #   NIXOSCONF_HOME_LINKS        1 | 0   link Documents, Downloads, ... and .ssh into /mnt/GD2/Backup
@@ -342,6 +343,7 @@ detect_lsfg_dll() {
   done
   return 0
 }
+HDA_MODEL="${NIXOSCONF_HDA_MODEL:-$(read_hw_string hdaModel)}"
 LSFG_DLL="${NIXOSCONF_LSFG_DLL:-$(read_hw_string lsfgDll)}"
 [ -n "$LSFG_DLL" ] || LSFG_DLL="$(detect_lsfg_dll)"
 
@@ -580,6 +582,8 @@ extra="$(hybrid_json; laptop_json)"
 lsfg_json=""
 [ -n "$LSFG_DLL" ] && lsfg_json="
   \"lsfgDll\": \"$LSFG_DLL\","
+[ -n "$HDA_MODEL" ] && lsfg_json="$lsfg_json
+  \"hdaModel\": \"$HDA_MODEL\","
 write_as_user "$DIR/hardware.json" <<JSON
 {
   "cpu": "$CPU",

@@ -23,6 +23,9 @@ let
   #           laptops whose mic array sits on the audio DSP ("DMICs detected
   #           in NHLT tables" above 0) but which got the generic HDA driver.
   #           Not the ThinkPad P53: it reports 0 and its mics are on the codec
+  #   hdaModel: null | string   snd-hda-intel model= for the built-in sound
+  #           chip, e.g. "stereo-dmic" for Conexant chips whose two internal
+  #           mics cancel out (one is wired inverted)
   #   sofDmics: null | number   with sofAudio: how many built-in digital
   #           mics to use when the firmware doesn't report them. Check the
   #           firmware setup first: a microphone disabled there is also
@@ -35,7 +38,7 @@ let
     cpu = "amd"; gpu = "amd"; igpu = "intel"; prime = "offload";
     busIds = { igpu = ""; nvidia = ""; }; laptop = false;
     dataDrives = true; homeLinks = true; firmwarePowerProfile = true;
-    cpuPowerLimitWatts = null; cpuTurbo = true; thinkpad = false; sofAudio = false; sofDmics = null;
+    cpuPowerLimitWatts = null; cpuTurbo = true; thinkpad = false; sofAudio = false; sofDmics = null; hdaModel = null;
   } // builtins.fromJSON (builtins.readFile ../hardware.json);
   powerCap = hw.cpuPowerLimitWatts;
   tuneCpu = powerCap != null || !hw.cpuTurbo;
@@ -223,11 +226,14 @@ in
   # no capture device; sofDmics declares the count. A mic switched off in
   # the firmware setup (ThinkPad: Security > I/O Port Access > Microphone)
   # looks the same, and there forcing a count only records noise.
-  boot.extraModprobeConfig = lib.mkIf hw.sofAudio (lib.concatStringsSep "\n" (
-    [ "options snd-intel-dspcfg dsp_driver=3" ]
-    ++ lib.optional (hw.sofDmics != null)
-      "options snd_sof_intel_hda_generic dmic_num=${toString hw.sofDmics}"
-  ));
+  boot.extraModprobeConfig = lib.concatStringsSep "\n" (
+    lib.optionals hw.sofAudio (
+      [ "options snd-intel-dspcfg dsp_driver=3" ]
+      ++ lib.optional (hw.sofDmics != null)
+        "options snd_sof_intel_hda_generic dmic_num=${toString hw.sofDmics}")
+    # Card 0 is the built-in chip; an NVIDIA HDMI card probes after it.
+    ++ lib.optional (hw.hdaModel != null) "options snd-hda-intel model=${hw.hdaModel}"
+  );
   hardware.trackpoint = lib.mkIf hw.thinkpad { enable = true; emulateWheel = true; };
   services.upower.enable = lib.mkIf hw.laptop true;
   hardware.sensor.iio.enable = hw.laptop;
@@ -245,7 +251,10 @@ in
   boot.kernel.sysctl."vm.swappiness" = lib.mkIf hw.laptop (lib.mkForce 60);
   # Brightness control from the shell for scripts and shortcuts, powertop
   # for finding what drains the battery, GPU monitors for the card in use.
-  environment.systemPackages = lib.optionals hw.laptop [ pkgs.brightnessctl pkgs.powertop ]
+  # alsa-utils: amixer, alsamixer, arecord and aplay for checking sound
+  # devices below PipeWire.
+  environment.systemPackages = [ pkgs.alsa-utils ]
+    ++ lib.optionals hw.laptop [ pkgs.brightnessctl pkgs.powertop ]
     ++ lib.optionals isNvidia [ pkgs.nvtopPackages.nvidia ]
     ++ lib.optionals isIntelGpu [ pkgs.intel-gpu-tools ];
 }
