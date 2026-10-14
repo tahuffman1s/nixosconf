@@ -20,9 +20,14 @@ let
   #   thinkpad: true | false   ThinkPad extras: thinkfan with a curve that
   #           spins up earlier than Lenovo's, fingerprint reader, TrackPoint
   #   sofAudio: true | false   force Intel's SOF audio driver, for Intel
-  #           laptops whose mic array sits on the audio DSP ("DMICs detected
-  #           in NHLT tables" above 0) but which got the generic HDA driver.
-  #           Not the ThinkPad P53: it reports 0 and its mics are on the codec
+  #           laptops whose mic array sits on the audio DSP but which got the
+  #           generic HDA driver (sound plays, no internal mic). A codec with
+  #           no capture controls at all (amixer scontrols) means the mics are
+  #           on the DSP. The firmware may still report 0 DMICs: see sofDmics
+  #   sofTopology: null | string   with sofAudio: SOF topology file to load
+  #           instead of the one it picks, e.g. "sof-hda-generic-2ch-pdm1.tplg"
+  #           for mics wired to the DSP's second PDM port (the default 2ch
+  #           topology reads PDM0 and records noise or silence otherwise)
   #   hdaModel: null | string   snd-hda-intel model= for the built-in sound
   #           chip, e.g. "stereo-dmic" for Conexant chips whose two internal
   #           mics cancel out (one is wired inverted)
@@ -38,7 +43,7 @@ let
     cpu = "amd"; gpu = "amd"; igpu = "intel"; prime = "offload";
     busIds = { igpu = ""; nvidia = ""; }; laptop = false;
     dataDrives = true; homeLinks = true; firmwarePowerProfile = true;
-    cpuPowerLimitWatts = null; cpuTurbo = true; thinkpad = false; sofAudio = false; sofDmics = null; hdaModel = null;
+    cpuPowerLimitWatts = null; cpuTurbo = true; thinkpad = false; sofAudio = false; sofDmics = null; sofTopology = null; hdaModel = null;
   } // builtins.fromJSON (builtins.readFile ../hardware.json);
   powerCap = hw.cpuPowerLimitWatts;
   tuneCpu = powerCap != null || !hw.cpuTurbo;
@@ -70,6 +75,8 @@ in
       message = "hardware.json: cpuPowerLimitWatts must be null or a whole number of watts (got ${toString powerCap})"; }
     { assertion = hw.sofDmics == null || builtins.elem hw.sofDmics [ 1 2 3 4 ];
       message = "hardware.json: sofDmics must be null or 1-4 (got ${toString hw.sofDmics})"; }
+    { assertion = hw.sofTopology == null || builtins.match "[A-Za-z0-9._-]+\\.tplg" hw.sofTopology != null;
+      message = "hardware.json: sofTopology must be a .tplg file name (got ${toString hw.sofTopology})"; }
     { assertion = isHybrid -> (hw.busIds.igpu != "" && hw.busIds.nvidia != "");
       message = "hardware.json: a hybrid GPU needs busIds.igpu and busIds.nvidia (PCI:bus:device:function, from lspci). Rerun setup.sh or fill them in."; }
   ];
@@ -230,7 +237,9 @@ in
     lib.optionals hw.sofAudio (
       [ "options snd-intel-dspcfg dsp_driver=3" ]
       ++ lib.optional (hw.sofDmics != null)
-        "options snd_sof_intel_hda_generic dmic_num=${toString hw.sofDmics}")
+        "options snd_sof_intel_hda_generic dmic_num=${toString hw.sofDmics}"
+      ++ lib.optional (hw.sofTopology != null)
+        "options snd-sof tplg_filename=${hw.sofTopology}")
     # Card 0 is the built-in chip; an NVIDIA HDMI card probes after it.
     ++ lib.optional (hw.hdaModel != null) "options snd-hda-intel model=${hw.hdaModel}"
   );
