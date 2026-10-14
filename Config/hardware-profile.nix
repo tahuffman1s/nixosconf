@@ -19,9 +19,10 @@ let
   #           "powerSaving"   what Plasma applies on the charger / on battery
   #   thinkpad: true | false   ThinkPad extras: thinkfan with a curve that
   #           spins up earlier than Lenovo's, fingerprint reader, TrackPoint
-  #   sofAudio: true | false   force Intel's SOF audio driver; needed for the
-  #           built-in digital microphones on Intel laptops (ThinkPad P53 and
-  #           similar) when the kernel picks the generic HDA driver instead
+  #   sofAudio: true | false   force Intel's SOF audio driver, for Intel
+  #           laptops whose mic array sits on the audio DSP ("DMICs detected
+  #           in NHLT tables" above 0) but which got the generic HDA driver.
+  #           Not the ThinkPad P53: it reports 0 and its mics are on the codec
   #   sofDmics: null | number   with sofAudio: how many built-in digital
   #           mics to use when the firmware doesn't report them. Check the
   #           firmware setup first: a microphone disabled there is also

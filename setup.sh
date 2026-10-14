@@ -463,7 +463,7 @@ if [ "$HAVE_TTY" = 1 ] && [ "$NO_UI" != 1 ]; then
     if confirm "Allow turbo boost? (no: hold the CPU at its base clock)" "$(yn "$CPU_TURBO")"; then CPU_TURBO=1; else CPU_TURBO=0; fi
     if confirm "Let the firmware's thermal mode change the power profile? (no if the profile keeps resetting to balanced)" "$(yn "$FW_PROFILE")"; then FW_PROFILE=1; else FW_PROFILE=0; fi
     if [ "$CPU" = intel ]; then
-      if confirm "Use Intel's SOF audio driver? (yes if the built-in microphone doesn't show up, as on the ThinkPad P53)" "$(yn "$SOF_AUDIO")"; then SOF_AUDIO=1; else SOF_AUDIO=0; fi
+      if confirm "Use Intel's SOF audio driver? (only if the kernel log reports DMICs in its NHLT tables but no internal mic shows up)" "$(yn "$SOF_AUDIO")"; then SOF_AUDIO=1; else SOF_AUDIO=0; fi
     fi
   fi
   box "Ready to install" \
