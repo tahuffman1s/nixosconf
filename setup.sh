@@ -301,8 +301,6 @@ SOF_AUDIO="${NIXOSCONF_SOF_AUDIO:-$(read_hw sofAudio)}"
 case "$SOF_AUDIO" in true|1) SOF_AUDIO=1 ;; *) SOF_AUDIO=0 ;; esac
 SOF_DMICS="${NIXOSCONF_SOF_DMICS:-$(read_hw sofDmics)}"
 case "$SOF_DMICS" in 1|2|3|4) ;; ''|null) SOF_DMICS="" ;; *) die "NIXOSCONF_SOF_DMICS must be 1-4 (got '$SOF_DMICS')" ;; esac
-# ThinkPad P53: two mics the firmware doesn't report.
-[ -z "$SOF_DMICS" ] && case "$(cat /sys/class/dmi/id/product_version 2>/dev/null)" in *"ThinkPad P53"*) SOF_DMICS=2 ;; esac
 FW_PROFILE="${NIXOSCONF_FIRMWARE_PROFILE:-$(read_hw firmwarePowerProfile)}"
 case "$FW_PROFILE" in true|1) FW_PROFILE=1 ;; false|0) FW_PROFILE=0 ;; *) FW_PROFILE=$((1 - THINKPAD)) ;; esac
 AC_PROFILE="${NIXOSCONF_AC_PROFILE:-$(read_hw acPowerProfile)}";           [ -n "$AC_PROFILE" ] || AC_PROFILE=performance

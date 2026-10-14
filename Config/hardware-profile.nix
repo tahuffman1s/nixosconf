@@ -23,7 +23,9 @@ let
   #           built-in digital microphones on Intel laptops (ThinkPad P53 and
   #           similar) when the kernel picks the generic HDA driver instead
   #   sofDmics: null | number   with sofAudio: how many built-in digital
-  #           mics to use when the firmware doesn't report them (P53: 2)
+  #           mics to use when the firmware doesn't report them. Check the
+  #           firmware setup first: a microphone disabled there is also
+  #           unreported, and forcing a count then records only noise
   #   lsfgDll: null | path   lsfg-vk.dll when Lossless Scaling is not in the
   #           default Steam library (read by Home/lsfg-vk.nix)
   #   dataDrives: true | false   mount GD1/GD2 (drives.nix)
@@ -216,8 +218,10 @@ in
   # audio DSP need the SOF driver to see it; the generic HDA driver still
   # plays sound but shows no built-in mic. dsp_driver=3 selects SOF; its
   # firmware and topology come with hardware.enableRedistributableFirmware.
-  # Some firmware (the P53's) doesn't list the mic array in its tables, so
-  # SOF loads with no capture device at all; sofDmics declares the count.
+  # Firmware that doesn't list the mic array in its tables leaves SOF with
+  # no capture device; sofDmics declares the count. A mic switched off in
+  # the firmware setup (ThinkPad: Config > I/O Port Access > Microphone)
+  # looks the same, and there forcing a count only records noise.
   boot.extraModprobeConfig = lib.mkIf hw.sofAudio (lib.concatStringsSep "\n" (
     [ "options snd-intel-dspcfg dsp_driver=3" ]
     ++ lib.optional (hw.sofDmics != null)
