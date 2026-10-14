@@ -19,6 +19,9 @@ let
   #           "powerSaving"   what Plasma applies on the charger / on battery
   #   thinkpad: true | false   ThinkPad extras: thinkfan with a curve that
   #           spins up earlier than Lenovo's, fingerprint reader, TrackPoint
+  #   sofAudio: true | false   force Intel's SOF audio driver; needed for the
+  #           built-in digital microphones on Intel laptops (ThinkPad P53 and
+  #           similar) when the kernel picks the generic HDA driver instead
   #   lsfgDll: null | path   lsfg-vk.dll when Lossless Scaling is not in the
   #           default Steam library (read by Home/lsfg-vk.nix)
   #   dataDrives: true | false   mount GD1/GD2 (drives.nix)
@@ -27,7 +30,7 @@ let
     cpu = "amd"; gpu = "amd"; igpu = "intel"; prime = "offload";
     busIds = { igpu = ""; nvidia = ""; }; laptop = false;
     dataDrives = true; homeLinks = true; firmwarePowerProfile = true;
-    cpuPowerLimitWatts = null; cpuTurbo = true; thinkpad = false;
+    cpuPowerLimitWatts = null; cpuTurbo = true; thinkpad = false; sofAudio = false;
   } // builtins.fromJSON (builtins.readFile ../hardware.json);
   powerCap = hw.cpuPowerLimitWatts;
   tuneCpu = powerCap != null || !hw.cpuTurbo;
@@ -203,6 +206,13 @@ in
     ];
   };
   services.fprintd.enable = lib.mkIf hw.thinkpad true;
+
+  # ---------------------------------------------------------------------
+  # Intel SOF audio. Laptops with a digital microphone array behind the
+  # audio DSP need the SOF driver to see it; the generic HDA driver still
+  # plays sound but shows no built-in mic. dsp_driver=3 selects SOF; its
+  # firmware and topology come with hardware.enableRedistributableFirmware.
+  boot.extraModprobeConfig = lib.mkIf hw.sofAudio "options snd-intel-dspcfg dsp_driver=3";
   hardware.trackpoint = lib.mkIf hw.thinkpad { enable = true; emulateWheel = true; };
   services.upower.enable = lib.mkIf hw.laptop true;
   hardware.sensor.iio.enable = hw.laptop;

@@ -27,6 +27,7 @@
 #   NIXOSCONF_CPU_TURBO         1 | 0   allow turbo boost (laptops)
 #   NIXOSCONF_FIRMWARE_PROFILE  1 | 0   let the firmware's thermal mode drive the power profile
 #   NIXOSCONF_AC_PROFILE, NIXOSCONF_BATTERY_PROFILE   performance | balanced | powerSaving
+#   NIXOSCONF_SOF_AUDIO         1 | 0   Intel SOF audio driver (built-in digital mics)
 #   NIXOSCONF_LSFG_DLL          path to lsfg-vk.dll        (default: kept, else found in Steam's libraries)
 #   NIXOSCONF_DRIVES            1 | 0   mount the GD1/GD2 data drives   (default: detected, then asked)
 #   NIXOSCONF_HOME_LINKS        1 | 0   link Documents, Downloads, ... and .ssh into /mnt/GD2/Backup
@@ -295,6 +296,8 @@ CPU_WATTS="${NIXOSCONF_CPU_WATTS:-$(read_hw cpuPowerLimitWatts)}"
 case "$CPU_WATTS" in ''|null|none|0) CPU_WATTS=none ;; *[!0-9]*) die "NIXOSCONF_CPU_WATTS must be a number of watts or none (got '$CPU_WATTS')" ;; esac
 CPU_TURBO="${NIXOSCONF_CPU_TURBO:-$(read_hw cpuTurbo)}"
 case "$CPU_TURBO" in false|0) CPU_TURBO=0 ;; *) CPU_TURBO=1 ;; esac
+SOF_AUDIO="${NIXOSCONF_SOF_AUDIO:-$(read_hw sofAudio)}"
+case "$SOF_AUDIO" in true|1) SOF_AUDIO=1 ;; *) SOF_AUDIO=0 ;; esac
 FW_PROFILE="${NIXOSCONF_FIRMWARE_PROFILE:-$(read_hw firmwarePowerProfile)}"
 case "$FW_PROFILE" in true|1) FW_PROFILE=1 ;; false|0) FW_PROFILE=0 ;; *) FW_PROFILE=$((1 - THINKPAD)) ;; esac
 AC_PROFILE="${NIXOSCONF_AC_PROFILE:-$(read_hw acPowerProfile)}";           [ -n "$AC_PROFILE" ] || AC_PROFILE=performance
@@ -456,11 +459,14 @@ if [ "$HAVE_TTY" = 1 ] && [ "$NO_UI" != 1 ]; then
     CPU_WATTS="${pick%% *}"
     if confirm "Allow turbo boost? (no: hold the CPU at its base clock)" "$(yn "$CPU_TURBO")"; then CPU_TURBO=1; else CPU_TURBO=0; fi
     if confirm "Let the firmware's thermal mode change the power profile? (no if the profile keeps resetting to balanced)" "$(yn "$FW_PROFILE")"; then FW_PROFILE=1; else FW_PROFILE=0; fi
+    if [ "$CPU" = intel ]; then
+      if confirm "Use Intel's SOF audio driver? (yes if the built-in microphone doesn't show up, as on the ThinkPad P53)" "$(yn "$SOF_AUDIO")"; then SOF_AUDIO=1; else SOF_AUDIO=0; fi
+    fi
   fi
   box "Ready to install" \
     "GPU       $(gpu_desc)" \
     "CPU       $CPU" \
-    "Laptop    $(yn "$LAPTOP")$([ "$LAPTOP" = 1 ] && echo "   ThinkPad: $(yn "$THINKPAD")   charger: $AC_PROFILE   battery: $BATTERY_PROFILE   CPU cap: $CPU_WATTS W   turbo: $(yn "$CPU_TURBO")   firmware profile: $(yn "$FW_PROFILE")")" \
+    "Laptop    $(yn "$LAPTOP")$([ "$LAPTOP" = 1 ] && echo "   ThinkPad: $(yn "$THINKPAD")   charger: $AC_PROFILE   battery: $BATTERY_PROFILE   CPU cap: $CPU_WATTS W   turbo: $(yn "$CPU_TURBO")   firmware profile: $(yn "$FW_PROFILE")   SOF audio: $(yn "$SOF_AUDIO")")" \
     "Drives    $(yn "$DATA_DRIVES")   home folder links: $(yn "$HOME_LINKS")" \
     "" \
     "Next: clone the config, generate the hardware files, build and" \
@@ -468,7 +474,7 @@ if [ "$HAVE_TTY" = 1 ] && [ "$NO_UI" != 1 ]; then
   confirm "Start now?" yes || { say "Nothing changed."; exit 0; }
 else
   say "No terminal for the setup UI; using GPU=$(gpu_desc) CPU=$CPU laptop=$LAPTOP drives=$DATA_DRIVES links=$HOME_LINKS (override with NIXOSCONF_GPU/CPU/LAPTOP/DRIVES/HOME_LINKS)"
-  [ "$LAPTOP" = 1 ] && say "Laptop: thinkpad=$THINKPAD charger=$AC_PROFILE battery=$BATTERY_PROFILE cpu_watts=$CPU_WATTS turbo=$CPU_TURBO firmware_profile=$FW_PROFILE"
+  [ "$LAPTOP" = 1 ] && say "Laptop: thinkpad=$THINKPAD charger=$AC_PROFILE battery=$BATTERY_PROFILE cpu_watts=$CPU_WATTS turbo=$CPU_TURBO firmware_profile=$FW_PROFILE sof_audio=$SOF_AUDIO"
 fi
 [ "$DATA_DRIVES" = 1 ] || HOME_LINKS=0
 if [ "$GPU" = hybrid ] && { [ -z "$IGPU_BUSID" ] || [ -z "$NVIDIA_BUSID" ]; }; then
@@ -562,6 +568,7 @@ laptop_json() {
   "cpuPowerLimitWatts": $([ "$CPU_WATTS" = none ] && echo null || echo "$CPU_WATTS"),
   "cpuTurbo": $(tf "$CPU_TURBO"),
   "firmwarePowerProfile": $(tf "$FW_PROFILE"),
+  "sofAudio": $(tf "$SOF_AUDIO"),
 JSON
 }
 say "Writing hardware.json (gpu=$(gpu_desc) cpu=$CPU laptop=$LAPTOP drives=$DATA_DRIVES links=$HOME_LINKS)"
