@@ -22,6 +22,8 @@ let
   #   sofAudio: true | false   force Intel's SOF audio driver; needed for the
   #           built-in digital microphones on Intel laptops (ThinkPad P53 and
   #           similar) when the kernel picks the generic HDA driver instead
+  #   sofDmics: null | number   with sofAudio: how many built-in digital
+  #           mics to use when the firmware doesn't report them (P53: 2)
   #   lsfgDll: null | path   lsfg-vk.dll when Lossless Scaling is not in the
   #           default Steam library (read by Home/lsfg-vk.nix)
   #   dataDrives: true | false   mount GD1/GD2 (drives.nix)
@@ -30,7 +32,7 @@ let
     cpu = "amd"; gpu = "amd"; igpu = "intel"; prime = "offload";
     busIds = { igpu = ""; nvidia = ""; }; laptop = false;
     dataDrives = true; homeLinks = true; firmwarePowerProfile = true;
-    cpuPowerLimitWatts = null; cpuTurbo = true; thinkpad = false; sofAudio = false;
+    cpuPowerLimitWatts = null; cpuTurbo = true; thinkpad = false; sofAudio = false; sofDmics = null;
   } // builtins.fromJSON (builtins.readFile ../hardware.json);
   powerCap = hw.cpuPowerLimitWatts;
   tuneCpu = powerCap != null || !hw.cpuTurbo;
@@ -60,6 +62,8 @@ in
       message = "hardware.json: prime must be offload or sync (got ${toString hw.prime})"; }
     { assertion = powerCap == null || (builtins.isInt powerCap && powerCap >= 5 && powerCap <= 500);
       message = "hardware.json: cpuPowerLimitWatts must be null or a whole number of watts (got ${toString powerCap})"; }
+    { assertion = hw.sofDmics == null || builtins.elem hw.sofDmics [ 1 2 3 4 ];
+      message = "hardware.json: sofDmics must be null or 1-4 (got ${toString hw.sofDmics})"; }
     { assertion = isHybrid -> (hw.busIds.igpu != "" && hw.busIds.nvidia != "");
       message = "hardware.json: a hybrid GPU needs busIds.igpu and busIds.nvidia (PCI:bus:device:function, from lspci). Rerun setup.sh or fill them in."; }
   ];
@@ -212,7 +216,13 @@ in
   # audio DSP need the SOF driver to see it; the generic HDA driver still
   # plays sound but shows no built-in mic. dsp_driver=3 selects SOF; its
   # firmware and topology come with hardware.enableRedistributableFirmware.
-  boot.extraModprobeConfig = lib.mkIf hw.sofAudio "options snd-intel-dspcfg dsp_driver=3";
+  # Some firmware (the P53's) doesn't list the mic array in its tables, so
+  # SOF loads with no capture device at all; sofDmics declares the count.
+  boot.extraModprobeConfig = lib.mkIf hw.sofAudio (lib.concatStringsSep "\n" (
+    [ "options snd-intel-dspcfg dsp_driver=3" ]
+    ++ lib.optional (hw.sofDmics != null)
+      "options snd_sof_intel_hda_generic dmic_num=${toString hw.sofDmics}"
+  ));
   hardware.trackpoint = lib.mkIf hw.thinkpad { enable = true; emulateWheel = true; };
   services.upower.enable = lib.mkIf hw.laptop true;
   hardware.sensor.iio.enable = hw.laptop;
