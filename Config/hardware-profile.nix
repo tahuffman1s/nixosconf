@@ -220,7 +220,7 @@ in
   # firmware and topology come with hardware.enableRedistributableFirmware.
   # Firmware that doesn't list the mic array in its tables leaves SOF with
   # no capture device; sofDmics declares the count. A mic switched off in
-  # the firmware setup (ThinkPad: Config > I/O Port Access > Microphone)
+  # the firmware setup (ThinkPad: Security > I/O Port Access > Microphone)
   # looks the same, and there forcing a count only records noise.
   boot.extraModprobeConfig = lib.mkIf hw.sofAudio (lib.concatStringsSep "\n" (
     [ "options snd-intel-dspcfg dsp_driver=3" ]
